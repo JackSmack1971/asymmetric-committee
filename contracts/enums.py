@@ -158,3 +158,57 @@ class ModelTier(StrEnum):
     FAST = "fast"
     STRONG = "strong"
     PROBE = "probe"
+
+
+class PriceFeed(StrEnum):
+    """Alpaca bar feed (§4.1). IEX is the free live feed; SIP is used for history > 15 min old."""
+
+    IEX = "iex"
+    SIP = "sip"
+
+
+class InsiderRole(StrEnum):
+    """Reporting-owner relationship on Form 4, most senior first."""
+
+    OFFICER = "officer"
+    DIRECTOR = "director"
+    TEN_PERCENT_OWNER = "ten_percent_owner"
+    OTHER = "other"
+
+
+class InsiderTxnCode(StrEnum):
+    """Form 4 transaction codes (SEC Form 4 General Instructions, item 8)."""
+
+    P = "P"  # open-market purchase
+    S = "S"  # open-market sale
+    A = "A"  # grant or award
+    D = "D"  # disposition to the issuer
+    F = "F"  # tax withholding
+    I = "I"  # discretionary  # noqa: E741
+    M = "M"  # option exercise
+    C = "C"  # conversion
+    E = "E"  # expiration of short derivative
+    H = "H"  # expiration of long derivative
+    O = "O"  # out-of-the-money exercise  # noqa: E741
+    X = "X"  # in-the-money exercise
+    G = "G"  # gift
+    L = "L"  # small acquisition
+    W = "W"  # will or laws of descent
+    Z = "Z"  # voting trust
+    J = "J"  # other
+    K = "K"  # equity swap
+    U = "U"  # tender of shares
+    V = "V"  # voluntarily reported early
+
+
+class NewsProviderName(StrEnum):
+    """`NEWS_PROVIDER` values (§4.1, §18.1)."""
+
+    ALPACA = "alpaca"
+    ALPHAVANTAGE = "alphavantage"
+
+
+class McapTier(StrEnum):
+    SMALL = "small"  # < $2B
+    MID = "mid"  # $2B to $10B
+    LARGE = "large"  # >= $10B

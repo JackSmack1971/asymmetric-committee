@@ -13,6 +13,7 @@ lint:
 	uv run ruff check .
 	uv run ruff format --check .
 	uv run mypy .
+	uv run lint-imports
 
 fmt:
 	uv run ruff format .
