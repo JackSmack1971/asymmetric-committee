@@ -1,0 +1,66 @@
+x-app: &app
+  build: .
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    DATABASE_URL: postgresql+psycopg://committee:committee@db:5432/committee
+    REDIS_URL: redis://redis:6379/0
+  depends_on:
+    db: {condition: service_healthy}
+    redis: {condition: service_healthy}
+
+services:
+  db:
+    image: timescale/timescaledb:latest-pg16
+    environment:
+      POSTGRES_USER: committee
+      POSTGRES_PASSWORD: committee
+      POSTGRES_DB: committee
+    ports: ["5432:5432"]
+    volumes: [dbdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U committee -d committee"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    <<: *app
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    ports: ["8000:8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    <<: *app
+    command: celery -A orchestration.celery_app worker --loglevel=info
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A orchestration.celery_app inspect ping -d celery@$$HOSTNAME"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  beat:
+    <<: *app
+    command: celery -A orchestration.celery_app beat --loglevel=info --schedule /tmp/celerybeat-schedule
+    healthcheck:
+      test: ["CMD-SHELL", "ls /tmp/celerybeat-schedule* >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  dbdata:

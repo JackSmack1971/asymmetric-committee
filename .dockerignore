@@ -1,0 +1,5 @@
+.venv
+.git
+dashboard
+**/__pycache__
+.env
