@@ -36,7 +36,8 @@ def _timescale() -> None:
     op.execute("CREATE EXTENSION IF NOT EXISTS timescaledb")
     for table in HYPERTABLES:
         op.execute(
-            f"SELECT create_hypertable('{table}', by_range('event_time', INTERVAL '30 days'))"
+            f"SELECT create_hypertable('{table}', by_range('event_time', INTERVAL '30 days'), "
+            "create_default_indexes => false)"
         )
 
 

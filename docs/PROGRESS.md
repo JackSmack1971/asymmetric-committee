@@ -6,7 +6,7 @@ Read at the start of every session; update at the end. Spec: `docs/asymmetric-co
 |---|---|---|---|---|
 | P-boot Bootstrap | Done (pending PR merge) | `make lint` + `make test` + `make up` healthy | `phase/P-boot` | Skeleton, uv, compose, Makefile, CI. No business logic. |
 | P0 Contracts | Done (pending PR merge) | `make gate-P0` passes (lint + tests/contracts + tests/config + schema freshness) | `phase/P0` | `contracts/` enums + models + strict LLM schemas; `config/` yaml + loader. Plan: `docs/plans/P0.md`. |
-| P1 Data | Not started | `make gate-P1` (stub) | `phase/P1` | |
+| P1 Data | Done (pending PR merge) | `make gate-P1` passes (lint + import-linter + store/ingest/universe/config tests incl. backfill smoke) | `claude/bitemporal-timescaledb-as-of-9yro0f` | Schema + Alembic, `store/as_of.py`, 4 ingestors, EDGAR limiter, freshness, universe snapshots, backfill CLI. Plan: `docs/plans/P1.md`. 2-year real backfill still to run (needs network + keys). |
 | P2 Features + gate + baseline | Not started | `make gate-P2` (stub) | `phase/P2` | |
 | P3 Agents | Not started | `make gate-P3` (stub) | `phase/P3` | |
 | P4 Committee + risk + CIO | Not started | `make gate-P4` (stub) | `phase/P4` | |
@@ -27,6 +27,24 @@ Read at the start of every session; update at the end. Spec: `docs/asymmetric-co
 - 2026-09-25 — P0: strict schemas inline `$ref`s and drop constraint keywords; Pydantic re-validates ranges after parsing. Regenerate with `uv run python -m contracts.schema_export`.
 - 2026-09-25 — P0: `security_id` is a positive int; `MAX_POSITION = 0.08` is a hard contract cap, and `risk.yaml` may only be tighter.
 - 2026-09-25 — P0: `load_config()` rejects placeholders (TODO slugs, empty sectors) unless `allow_placeholders=True` (tests only). `RUN_BUDGET_USD` env overrides `pipeline.yaml`.
+
+- 2026-09-25 — P1: one version rule for every fact table: per natural key, max `(available_at, source_version)` among rows with `available_at <= as_of`. Inserts are `ON CONFLICT DO NOTHING`; `fundamentals_asfiled` and `decision_commitments` have insert-only triggers.
+- 2026-09-25 — P1: spec §4.3 edited: `fundamentals_asfiled` + `period_start`/`fiscal_period`/`form`, `news_items` + `summary`, `price_bars.ts` → `event_time`, new `feed_health`.
+- 2026-09-25 — P1: invariant 2 enforced by import-linter (`make lint`): agents/features/gate/committee/risk/evaluation/universe may not import `sqlalchemy`, `psycopg`, `store._tables`, `store.migrate`; decision code also not `store.write`/`store.db`/`ingest`. Ruff TID251 bans `store._tables` outside `store/`.
+- 2026-09-25 — P1: EDGAR limiter = Redis sliding-window log, 8 per 1.05 s (5% jitter margin), shared by all workers. Live EDGAR requires `REDIS_URL`; the in-process limiter is only for replay.
+- 2026-09-25 — P1: bars are unadjusted (`adjustment=raw`); split-adjusting history is look-ahead. P2 features must handle splits point-in-time.
+- 2026-09-25 — P1: EDGAR `acceptanceDateTime` is read as Eastern despite its `Z`; Alpha Vantage `time_published` read as Eastern. Both are the later reading, so never look-ahead.
+- 2026-09-25 — P1: universe ranks by log(ADV20) (SPEC-GAP: §4.4 "liquidity-adjusted score" undefined). Snapshots store every in-sector candidate with a reason.
+- 2026-09-25 — P1: `pipeline.yaml` `freshness_sla_hours` (price 72h to cover weekends, fundamentals/insider 36h, news 1h). Trading-calendar-aware SLAs are left for P5 (kill switch).
+
+## Open issues (P1)
+
+- **Fixtures are synthetic.** This environment could not reach SEC/Alpaca/Alpha Vantage. Record real responses (`python -m ingest.backfill ... --record tests/fixtures/http`) and re-run the parser tests before trusting production ingestion.
+- **News timestamps unverified (§18.1).** No real recordings, so the reliability check could not be done. Alpaca returns only the latest text (backfill items become visible at `updated_at`); Alpha Vantage has no zone and no revision stamp. Run `ingest.news.timestamp_audit` on real recordings before picking `NEWS_PROVIDER`.
+- **TimescaleDB not tested locally** (no package here). Hypertable creation is covered only by CI (`REQUIRE_TIMESCALE=1`).
+- **Seeding survivorship:** SEC's `company_tickers_exchange.json` lists current names only, so names delisted before the first backfill are missing. Snapshots are survivorship-safe from P1 on.
+- Form 4: only the non-derivative table is ingested; 4/A amendments are separate rows (not merged with the original).
+- Early-close sessions are treated as 16:00 ET closes (only delays availability); exchange holidays are not modelled for month-end dates.
 
 ## Open questions (seeded from §18)
 

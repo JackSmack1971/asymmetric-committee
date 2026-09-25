@@ -1,4 +1,4 @@
-.PHONY: up down test lint fmt $(addprefix gate-P,0 1 2 3 4 5 6 7 8)
+.PHONY: up down test lint fmt migrate backfill-smoke $(addprefix gate-P,0 1 2 3 4 5 6 7 8)
 
 up:
 	docker compose up -d --build --wait
@@ -25,8 +25,21 @@ gate-P0: lint
 	uv run pytest tests/contracts tests/config
 	uv run python -m contracts.schema_export --check
 
-gate-P1:
-	@echo "gate-P1: not implemented"; exit 1
+# P1: lint (incl. import-linter) + point-in-time property/restatement/Form 4 tests, EDGAR limiter
+# load test, parser tests, universe snapshots and the 5-ticker x 90-day backfill smoke replayed
+# from tests/fixtures/http. Needs Postgres + Redis (TEST_DATABASE_URL / TEST_REDIS_URL, or local
+# binaries); REQUIRE_SERVICES=1 makes a missing service fail instead of skip.
+gate-P1: lint
+	REQUIRE_SERVICES=1 uv run pytest tests/store tests/ingest tests/universe tests/config
+
+migrate:
+	uv run python -m store.migrate
+
+# The gate's smoke run as a CLI against $$DATABASE_URL (after `make migrate`).
+backfill-smoke:
+	NEWS_PROVIDER=alpaca uv run python -m ingest.backfill --days 90 --end 2024-06-28 \
+	    --tickers ALFA,BRVO,CHRL,DLTA,ECHO --universe tests/fixtures/universe_smoke.yaml \
+	    --replay tests/fixtures/http
 
 gate-P2:
 	@echo "gate-P2: not implemented"; exit 1
