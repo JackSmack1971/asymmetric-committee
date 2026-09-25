@@ -148,10 +148,10 @@ The canonical query helper is `as_of(table, ts)`, which returns rows `WHERE avai
 ```
 securities            (security_id, ticker, cik, name, sector, industry, listed_from, listed_to)
 universe_snapshots    (snapshot_date, security_id, mcap_tier, adv_usd, included bool)   -- survivorship-safe
-price_bars            hypertable (security_id, ts, o,h,l,c,v, feed, available_at)
-fundamentals_asfiled  (security_id, concept, period_end, value, unit, accession, available_at)
+price_bars            hypertable (security_id, event_time, o,h,l,c,v, feed, available_at)
+fundamentals_asfiled  (security_id, concept, unit, period_start, period_end, fiscal_period, form, value, accession, available_at)
 insider_txns          (security_id, filer, role, txn_date, code, shares, price, post_holdings, is_10b5_1, accession, available_at)
-news_items            (item_id, security_ids[], published_at, headline, body_hash, source, available_at, revision)
+news_items            (item_id, security_ids[], published_at, headline, summary, body_hash, source, available_at, revision)
 features              hypertable (security_id, as_of, feature_set_version, jsonb)
 runs                  (run_id, mode[live|backtest|ablation], as_of, config_hash, status, started_at, ended_at)
 gate_decisions        (run_id, security_id, score, passed, components jsonb)
@@ -161,7 +161,10 @@ decision_commitments  (run_id, sha256, committed_at)   -- append-only
 orders / fills        (run_id, broker_order_id, ..., slippage_bps)
 outcomes              (run_id, security_id, horizon, fwd_return, sector_fwd_return, scored_at)
 agent_scores          (agent, window, brier, ic, hit_rate, n)   -- rolling
+feed_health           (feed, last_success_at, last_available_at, rows, last_error)   -- freshness SLA (§13)
 ```
+
+Every fact table also carries the §4.2 columns (`event_time`, `available_at`, `ingested_at`, `source_version`). `period_start` is needed because quarterly and year-to-date facts share `period_end` and accession.
 
 That is 15 tables versus 7. The additions are what make the evaluation honest.
 
