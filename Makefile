@@ -41,8 +41,9 @@ backfill-smoke:
 	    --tickers ALFA,BRVO,CHRL,DLTA,ECHO --universe tests/fixtures/universe_smoke.yaml \
 	    --replay tests/fixtures/http
 
-gate-P2:
-	@echo "gate-P2: not implemented"; exit 1
+gate-P2: lint
+	uv run pytest tests/contracts tests/config tests/features tests/gate tests/risk tests/evaluation
+	uv run python -m contracts.schema_export --check
 
 gate-P3:
 	@echo "gate-P3: not implemented"; exit 1
@@ -61,4 +62,3 @@ gate-P7:
 
 gate-P8:
 	@echo "gate-P8: not implemented"; exit 1
-
