@@ -115,6 +115,7 @@ class AgentVerdict(BaseModel):
 
 The model-cutoff rule applies only when `Run.mode` is `RunMode.BACKTEST`: the system sets `valid=False` when the verdict's served model makes the backtest window invalid, and otherwise sets `valid=True`. Live and ablation runs always set `valid=True`; their suitability is handled by their respective evaluation protocol rather than overloading verdict validity.
 
+**Ownership and consumption.** `agents/base.py` is the only place `valid` is computed, at verdict creation, from the served model's cutoff in `config/models.yaml`. The committee and evaluator only read it: verdicts with `valid=False` are excluded from pooling and from scoring, and are never recomputed downstream. `valid` has no default. A missing value is a validation error, so a producer that forgets it fails closed instead of silently including a contaminated verdict. `agent_verdicts.verdict` stores the full verdict as JSONB, so `valid` is stored there. No verdict rows are written before P3; any rows created earlier must be backfilled with an explicit `valid` before re-validation.
 `p_outperform` is the scored quantity. Asking for a probability instead of "confidence 0–100" makes calibration measurable. `key_evidence` must reference row IDs from the input partition, and the validator rejects citations to data the agent was not given. This catches leaks from the model's memory.
 
 ---
@@ -273,7 +274,7 @@ w         = clip(w, 0, max_position)
 | **Strong** | Red team, CIO | Best reasoning, supports `structured_outputs` |
 | **Probe** | Memorization tests (§12.1) | Same models as production |
 
-Pin exact model slugs in `config/models.yaml` with each model's **stated training cutoff**. The evaluator reads that file to decide which backtest windows are valid.
+Pin exact model slugs in `config/models.yaml` with each model's **stated training cutoff**. `agents/base.py` reads that file to set `valid` on each verdict (§3.1), and the evaluator reads it to choose valid backtest windows (§12). Both use the same loader; neither re-derives the other's result.
 
 ### 10.2 Request policy
 
@@ -288,11 +289,11 @@ extra_body = {
 }
 ```
 
-- **Record `response.model`.** A fallback silently changes which model answered. Scores are tracked per served model, and a fallback model with a *later* cutoff invalidates that verdict for backtests.
+- **Record `response.model`.** A fallback silently changes which model answered. Scores are tracked per served model, and a fallback model with a *later* cutoff makes `agents/base.py` set `valid=False` on that verdict in backtest runs (§3.1).
 - **Rate limiting:** a Redis token bucket per model (requests and tokens). Celery workers acquire tokens before calling. Exponential backoff with jitter, capped at 3 retries, then the job goes to a dead-letter queue. The run does not stall.
 - **Cache:** key = `sha256(agent, prompt_version, model, input_partition_hash)`. Identical inputs are never re-billed, and re-runs are deterministic.
 - **Budget:** a per-run USD cap. Exceeding it aborts remaining agent calls and marks the run `PARTIAL`, so it can never be scored as complete.
-- **Validation:** Pydantic parse → evidence-reference check → range checks. One repair attempt, then the verdict is discarded as `invalid`.
+- **Validation:** Pydantic parse → evidence-reference check → range checks. One repair attempt, then the verdict is discarded as `invalid` (a failed call, never persisted as a verdict; not the same as `valid=False`, which is a persisted verdict excluded for cutoff reasons).
 
 ### 10.3 Prompting
 

@@ -39,6 +39,7 @@ Read at the start of every session; update at the end. Spec: `docs/asymmetric-co
 - 2026-09-25 — P2: `fs_v1` uses annualized 20-day volatility (daily standard deviation × √252); the existing `k=0.02` and dispersion λ=0.5 are now the baseline methodology.
 - 2026-09-25 — P2: portfolio volatility uses a deterministic diagonal covariance estimate because §8.1 does not define covariance estimation. Sector and volatility scaling never redistribute clipped/dropped weight.
 - 2026-09-25 — P2: quant baseline emits `CommitteeDecision` with a singleton `quant_baseline` agent weight, allowing it to share the exact risk path without pretending to be an LLM voter.
+- 2026-09-25 — P0 contract amendment (PR #8): `AgentVerdict`/`RedTeamVerdict` gain a system-filled `valid: bool` (backtest cutoff validity), set only in `agents/base.py` and never LLM-facing. It is required with no default (fail closed). Committee/evaluator exclude `valid=False` and never recompute it. Spec §3.1/§10.1/§10.3 reconciled; no persisted verdict rows exist before P3, so no migration is needed.
 
 ## Open issues (P1–P2)
 
