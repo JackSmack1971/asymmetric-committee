@@ -1,0 +1,87 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "data_sufficiency": {
+      "enum": [
+        "full",
+        "partial",
+        "insufficient"
+      ],
+      "type": "string"
+    },
+    "horizon_days": {
+      "description": "Scoring horizon in trading days.",
+      "enum": [
+        21,
+        63
+      ],
+      "type": "integer"
+    },
+    "key_evidence": {
+      "description": "1 to 5 citations of input rows.",
+      "items": {
+        "additionalProperties": false,
+        "description": "A citation of one row in the agent's input partition.",
+        "properties": {
+          "note": {
+            "description": "What this row shows, in one sentence.",
+            "type": "string"
+          },
+          "row_id": {
+            "description": "Row ID exactly as shown in the input table.",
+            "type": "string"
+          },
+          "source": {
+            "description": "Input partition the cited row belongs to.",
+            "enum": [
+              "price_bars",
+              "fundamentals",
+              "insider_trades",
+              "news",
+              "regime",
+              "features"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "row_id",
+          "note"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "p_outperform": {
+      "description": "Probability (0 to 1) the entity beats its sector ETF over the horizon.",
+      "type": "number"
+    },
+    "risks": {
+      "description": "At most 3 key risks.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "stance": {
+      "enum": [
+        "strong_sell",
+        "sell",
+        "hold",
+        "buy",
+        "strong_buy"
+      ],
+      "type": "string"
+    }
+  },
+  "required": [
+    "stance",
+    "p_outperform",
+    "horizon_days",
+    "key_evidence",
+    "risks",
+    "data_sufficiency"
+  ],
+  "type": "object"
+}
