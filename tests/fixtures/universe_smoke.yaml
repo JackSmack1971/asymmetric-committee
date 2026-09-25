@@ -1,0 +1,7 @@
+# Universe rules for the synthetic smoke fixtures (tests/fixtures/README.md). Not the real universe.
+sectors: [Information Technology, Health Care]
+market_cap_min_usd: 500_000_000
+market_cap_max_usd: 50_000_000_000
+adv20_min_usd: 10_000_000
+price_min_usd: 5.0
+top_n: 2
