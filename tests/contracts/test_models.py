@@ -94,6 +94,7 @@ VERDICT: dict[str, Any] = {
     "data_sufficiency": DataSufficiency.FULL,
     "prompt_version": "v1",
     "model_served": "vendor/model-2026-01",
+    "valid": True,
 }
 
 

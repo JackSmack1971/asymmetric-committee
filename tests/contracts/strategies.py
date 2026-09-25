@@ -66,12 +66,13 @@ agent_verdict_llm_kwargs: dict[str, st.SearchStrategy[Any]] = dict(
 envelope: dict[str, st.SearchStrategy[Any]] = dict(
     run_id=uuids, as_of=aware_dt, prompt_version=labels, model_served=labels
 )
+verdict_envelope = {**envelope, "valid": st.booleans()}
 
 agent_verdict_llm = st.builds(m.AgentVerdictLLM, **agent_verdict_llm_kwargs)
 agent_verdict = st.builds(
     m.AgentVerdict,
     **agent_verdict_llm_kwargs,
-    **envelope,
+    **verdict_envelope,
     agent=voting_agent,
     entity_token=entity_token,
 )
@@ -84,7 +85,7 @@ red_team_llm_kwargs: dict[str, st.SearchStrategy[Any]] = dict(
 )
 red_team_verdict_llm = st.builds(m.RedTeamVerdictLLM, **red_team_llm_kwargs)
 red_team_verdict = st.builds(
-    m.RedTeamVerdict, **red_team_llm_kwargs, **envelope, entity_token=entity_token
+    m.RedTeamVerdict, **red_team_llm_kwargs, **verdict_envelope, entity_token=entity_token
 )
 
 cio_name_decision = st.one_of(

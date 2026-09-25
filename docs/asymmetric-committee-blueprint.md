@@ -108,9 +108,12 @@ class AgentVerdict(BaseModel):
     data_sufficiency: DataSufficiency   # enum: full | partial | insufficient
     prompt_version: str
     model_served: str           # from response.model, NOT the requested model
+    valid: bool                 # system-computed backtest-cutoff validity
 ```
 
-**LLM-authored vs system-filled.** Only `stance`, `p_outperform`, `horizon_days`, `key_evidence`, `risks` and `data_sufficiency` come from the model (`AgentVerdictLLM`). `run_id`, `agent`, `entity_token`, `as_of`, `prompt_version` and `model_served` are filled in by `agents/base.py`. The strict `response_format` schema (§10.2) is the schema of `AgentVerdictLLM`, so the LLM can never write `model_served`. `RedTeamVerdict` and `CioDecision` are split the same way.
+**LLM-authored vs system-filled.** Only `stance`, `p_outperform`, `horizon_days`, `key_evidence`, `risks` and `data_sufficiency` come from the model (`AgentVerdictLLM`). `run_id`, `agent`, `entity_token`, `as_of`, `prompt_version`, `model_served` and `valid` are filled in by `agents/base.py`. Validity is a boolean on each agent and red-team verdict, rather than an enum or a separate evaluation record, because this decision has only two outcomes and must travel with the verdict that the committee may include or exclude. The strict `response_format` schema (§10.2) is the schema of `AgentVerdictLLM`, so the LLM can never write `model_served` or `valid`. `RedTeamVerdict` uses the same split; `CioDecision` has no validity field.
+
+The model-cutoff rule applies only when `Run.mode` is `RunMode.BACKTEST`: the system sets `valid=False` when the verdict's served model makes the backtest window invalid, and otherwise sets `valid=True`. Live and ablation runs always set `valid=True`; their suitability is handled by their respective evaluation protocol rather than overloading verdict validity.
 
 `p_outperform` is the scored quantity. Asking for a probability instead of "confidence 0–100" makes calibration measurable. `key_evidence` must reference row IDs from the input partition, and the validator rejects citations to data the agent was not given. This catches leaks from the model's memory.
 
