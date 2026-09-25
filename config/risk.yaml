@@ -1,0 +1,18 @@
+# Deterministic sizing and constraints (§8.1, §8.2, §9). Weights are fractions of NAV.
+long_only: true
+max_position: 0.08          # hard cap; must be <= contracts.models.MAX_POSITION
+max_sector: 0.30
+vol_target_annual: 0.12     # scales gross exposure
+min_position: 0.01          # smaller targets become 0
+entry_threshold: 0.56       # p_pool >= this to enter
+# Sizing: raw_w = k * edge / sigma_20d; w = raw_w * (1 - lambda * dispersion) * bear_multiplier
+# SPEC-GAP: §8.1 gives no defaults for k or lambda. Placeholders, fix before P4.
+k: 0.02
+dispersion_lambda: 0.5
+bear_multiplier:            # §7: high halves the target weight
+  low: 1.0
+  med: 1.0
+  high: 0.5
+cio_veto_budget: 0.20       # §8.2: > 20% vetoed raises an alert
+kill_switch_daily_loss: 0.03  # §9
+modeled_cost_bps: 5.0       # §9: spread/2 + 5 bps
