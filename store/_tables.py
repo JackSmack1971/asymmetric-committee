@@ -225,6 +225,14 @@ gate_decisions = Table(
     UniqueConstraint("run_id", "security_id", name="uq_gate_decisions"),
 )
 
+proposed_books = Table(
+    "proposed_books",
+    metadata,
+    Column("run_id", UUID(as_uuid=True), ForeignKey("runs.run_id"), primary_key=True),
+    _ts("as_of"),
+    Column("book", JSONB, nullable=False),
+)
+
 agent_verdicts = Table(
     "agent_verdicts",
     metadata,

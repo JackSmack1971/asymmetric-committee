@@ -7,7 +7,7 @@ Read at the start of every session; update at the end. Spec: `docs/asymmetric-co
 | P-boot Bootstrap | Done (pending PR merge) | `make lint` + `make test` + `make up` healthy | `phase/P-boot` | Skeleton, uv, compose, Makefile, CI. No business logic. |
 | P0 Contracts | Done (pending PR merge) | `make gate-P0` passes (lint + tests/contracts + tests/config + schema freshness) | `phase/P0` | `contracts/` enums + models + strict LLM schemas; `config/` yaml + loader. Plan: `docs/plans/P0.md`. |
 | P1 Data | Done (pending PR merge) | `make gate-P1` passes (lint + import-linter + store/ingest/universe/config tests incl. backfill smoke) | `claude/bitemporal-timescaledb-as-of-9yro0f` | Schema + Alembic, `store/as_of.py`, 4 ingestors, EDGAR limiter, freshness, universe snapshots, backfill CLI. Plan: `docs/plans/P1.md`. 2-year real backfill still to run (needs network + keys). |
-| P2 Features + gate + baseline | Not started | `make gate-P2` (stub) | `phase/P2` | |
+| P2 Features + gate + baseline | Done (pending PR merge) | `make gate-P2` passes (lint + contracts/config + deterministic features, leak-safe gate, risk properties, 12-week smoke) | `phase/P2` | `fs_v1`; fixture gate recall: 100%. Plan: `docs/plans/P2.md`. |
 | P3 Agents | Not started | `make gate-P3` (stub) | `phase/P3` | |
 | P4 Committee + risk + CIO | Not started | `make gate-P4` (stub) | `phase/P4` | |
 | P5 Orchestration + execution | Not started | `make gate-P5` (stub) | `phase/P5` | |
@@ -36,8 +36,11 @@ Read at the start of every session; update at the end. Spec: `docs/asymmetric-co
 - 2026-09-25 — P1: EDGAR `acceptanceDateTime` is read as Eastern despite its `Z`; Alpha Vantage `time_published` read as Eastern. Both are the later reading, so never look-ahead.
 - 2026-09-25 — P1: universe ranks by log(ADV20) (SPEC-GAP: §4.4 "liquidity-adjusted score" undefined). Snapshots store every in-sector candidate with a reason.
 - 2026-09-25 — P1: `pipeline.yaml` `freshness_sla_hours` (price 72h to cover weekends, fundamentals/insider 36h, news 1h). Trading-calendar-aware SLAs are left for P5 (kill switch).
+- 2026-09-25 — P2: `fs_v1` uses annualized 20-day volatility (daily standard deviation × √252); the existing `k=0.02` and dispersion λ=0.5 are now the baseline methodology.
+- 2026-09-25 — P2: portfolio volatility uses a deterministic diagonal covariance estimate because §8.1 does not define covariance estimation. Sector and volatility scaling never redistribute clipped/dropped weight.
+- 2026-09-25 — P2: quant baseline emits `CommitteeDecision` with a singleton `quant_baseline` agent weight, allowing it to share the exact risk path without pretending to be an LLM voter.
 
-## Open issues (P1)
+## Open issues (P1–P2)
 
 - **Fixtures are synthetic.** This environment could not reach SEC/Alpaca/Alpha Vantage. Record real responses (`python -m ingest.backfill ... --record tests/fixtures/http`) and re-run the parser tests before trusting production ingestion.
 - **News timestamps unverified (§18.1).** No real recordings, so the reliability check could not be done. Alpaca returns only the latest text (backfill items become visible at `updated_at`); Alpha Vantage has no zone and no revision stamp. Run `ingest.news.timestamp_audit` on real recordings before picking `NEWS_PROVIDER`.
@@ -45,6 +48,8 @@ Read at the start of every session; update at the end. Spec: `docs/asymmetric-co
 - **Seeding survivorship:** SEC's `company_tickers_exchange.json` lists current names only, so names delisted before the first backfill are missing. Snapshots are survivorship-safe from P1 on.
 - Form 4: only the non-derivative table is ingested; 4/A amendments are separate rows (not merged with the original).
 - Early-close sessions are treated as 16:00 ET closes (only delays availability); exchange holidays are not modelled for month-end dates.
+- P2 covariance is diagonal; correlated sector portfolios can realize volatility above the modelled 12% target. Adopt a point-in-time covariance estimator before treating the target as a forecast.
+- P1 stores raw bars but no point-in-time corporate-action feed. `fs_v1` therefore cannot distinguish splits from returns; add such a feed before using split-affected windows in production evaluation.
 
 ## Open questions (seeded from §18)
 

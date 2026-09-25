@@ -22,6 +22,7 @@ from contracts.data import (
     UniverseMember,
 )
 from contracts.enums import FeedName
+from contracts.models import GateDecision, ProposedBook, RunRecord
 from store import _tables as t
 
 _CHUNK = 1000
@@ -74,6 +75,25 @@ def insert_features(conn: Connection, rows: Sequence[FeatureRow]) -> int:
 
 def insert_universe_snapshot(conn: Connection, rows: Sequence[UniverseMember]) -> int:
     return _insert(conn, t.universe_snapshots, rows)
+
+
+def insert_run(conn: Connection, run: RunRecord) -> int:
+    return _insert(conn, t.runs, [run])
+
+
+def insert_gate_decisions(conn: Connection, rows: Sequence[GateDecision]) -> int:
+    """Persist passed and dropped candidates: the gate's complete shadow log."""
+    return _insert(conn, t.gate_decisions, rows)
+
+
+def insert_proposed_book(conn: Connection, book: ProposedBook) -> int:
+    stmt = (
+        insert(t.proposed_books)
+        .values(run_id=book.run_id, as_of=book.as_of, book=book.model_dump(mode="json"))
+        .on_conflict_do_nothing()
+        .returning(literal(1))
+    )
+    return len(conn.execute(stmt).all())
 
 
 # --- reference data --------------------------------------------------------------------------

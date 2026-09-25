@@ -253,7 +253,8 @@ class CommitteeDecision(Contract):
         agents = [w.agent for w in self.agent_weights]
         if len(agents) != len(set(agents)):
             raise ValueError("duplicate agent in agent_weights")
-        if not set(agents) <= VOTING_AGENTS:
+        baseline = agents == [AgentName.QUANT_BASELINE]
+        if not baseline and not set(agents) <= VOTING_AGENTS:
             raise ValueError("only voting agents carry pooling weights")
         return self
 
