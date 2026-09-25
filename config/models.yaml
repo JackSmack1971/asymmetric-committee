@@ -1,21 +1,30 @@
 # LLM model tiers (§10.1). The evaluator reads stated_training_cutoff to pick valid backtest
 # windows (§12.1): valid window starts after the latest cutoff + 60 days.
 #
-# TODO(owner): replace every "TODO/..." slug with a pinned OpenRouter slug and its stated
-# training cutoff. The loader refuses placeholders unless allow_placeholders=True (tests only).
+# TODO(owner): replace every "TODO/..." slug with a pinned OpenRouter slug and its metadata.
+# The loader refuses placeholders unless allow_placeholders=True (tests only).
 tiers:
   fast:        # Value, Quality+Catalyst, Insider, Technical, Macro
-    slug: "TODO/fast-model"
-    fallback_slugs: ["TODO/fast-fallback"]
-    stated_training_cutoff: 2000-01-01   # TODO
-    supports_structured_outputs: true
+    primary:
+      slug: "TODO/fast-model"
+      stated_training_cutoff: 2000-01-01   # TODO
+      supports_structured_outputs: true
+    fallbacks:
+      - slug: "TODO/fast-fallback"
+        stated_training_cutoff: 2000-01-01   # TODO
+        supports_structured_outputs: true
   strong:      # Red team, CIO
-    slug: "TODO/strong-model"
-    fallback_slugs: ["TODO/strong-fallback"]
-    stated_training_cutoff: 2000-01-01   # TODO
-    supports_structured_outputs: true
+    primary:
+      slug: "TODO/strong-model"
+      stated_training_cutoff: 2000-01-01   # TODO
+      supports_structured_outputs: true
+    fallbacks:
+      - slug: "TODO/strong-fallback"
+        stated_training_cutoff: 2000-01-01   # TODO
+        supports_structured_outputs: true
   probe:       # Memorization probes (§12.1): must be a production model
-    slug: "TODO/fast-model"
-    fallback_slugs: []
-    stated_training_cutoff: 2000-01-01   # TODO
-    supports_structured_outputs: true
+    primary:
+      slug: "TODO/fast-model"
+      stated_training_cutoff: 2000-01-01   # TODO
+      supports_structured_outputs: true
+    fallbacks: []
