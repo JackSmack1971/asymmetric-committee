@@ -52,8 +52,8 @@ def edit(cfg_dir: Path, name: str, path: list[str], value: object) -> None:
 def fill_placeholders(cfg_dir: Path) -> None:
     edit(cfg_dir, "universe", ["sectors"], ["Semiconductors"])
     for tier, slug in [("fast", "a/fast"), ("strong", "a/strong"), ("probe", "a/fast")]:
-        edit(cfg_dir, "models", ["tiers", tier, "slug"], slug)
-        edit(cfg_dir, "models", ["tiers", tier, "fallback_slugs"], [])
+        edit(cfg_dir, "models", ["tiers", tier, "primary", "slug"], slug)
+        edit(cfg_dir, "models", ["tiers", tier, "fallbacks"], [])
 
 
 def test_placeholders_rejected_by_default() -> None:
@@ -63,9 +63,56 @@ def test_placeholders_rejected_by_default() -> None:
 
 def test_filled_config_loads_strict(cfg_dir: Path) -> None:
     fill_placeholders(cfg_dir)
-    edit(cfg_dir, "models", ["tiers", "strong", "stated_training_cutoff"], "2026-03-01")
+    edit(cfg_dir, "models", ["tiers", "strong", "primary", "stated_training_cutoff"], "2026-03-01")
     cfg = load_config(cfg_dir, env={})
     assert cfg.models.latest_stated_cutoff() == date(2026, 3, 1)
+
+
+def test_response_model_lookup_handles_primary_and_fallback_independently(cfg_dir: Path) -> None:
+    edit(
+        cfg_dir,
+        "models",
+        ["tiers", "strong", "primary", "stated_training_cutoff"],
+        "2023-01-01",
+    )
+    edit(
+        cfg_dir,
+        "models",
+        [
+            "tiers",
+            "strong",
+            "fallbacks",
+        ],
+        [
+            {
+                "slug": "provider/served-fallback",
+                "stated_training_cutoff": "2024-06-30",
+                "supports_structured_outputs": True,
+            }
+        ],
+    )
+    cfg = load_config(cfg_dir, allow_placeholders=True, env={})
+
+    primary = cfg.models.model_for_response("TODO/strong-model")
+    fallback = cfg.models.model_for_response("provider/served-fallback")
+    assert primary.stated_training_cutoff == date(2023, 1, 1)
+    assert fallback.stated_training_cutoff == date(2024, 6, 30)
+    assert fallback.supports_structured_outputs is True
+
+
+def test_unknown_response_model_is_rejected() -> None:
+    cfg = load_config(allow_placeholders=True, env={})
+
+    with pytest.raises(ValueError, match="unknown served model"):
+        cfg.models.model_for_response("provider/unconfigured-model")
+
+
+def test_duplicate_slugs_within_tier_are_rejected(cfg_dir: Path) -> None:
+    primary = yaml.safe_load((cfg_dir / "models.yaml").read_text())["tiers"]["fast"]["primary"]
+    edit(cfg_dir, "models", ["tiers", "fast", "fallbacks"], [primary])
+
+    with pytest.raises(ConfigError, match="duplicate model slug"):
+        load_config(cfg_dir, allow_placeholders=True, env={})
 
 
 def test_env_budget_override(cfg_dir: Path) -> None:
@@ -82,9 +129,14 @@ def test_env_budget_override(cfg_dir: Path) -> None:
         ("risk", ["long_only"], False, "long_only"),
         ("risk", ["bear_multiplier"], {"low": 1.0, "high": 0.5}, "bear_multiplier"),
         ("risk", ["surprise"], 1, "extra"),
-        ("models", ["tiers", "fast", "supports_structured_outputs"], False, "structured"),
-        ("models", ["tiers", "probe", "slug"], "TODO/other", "probe"),
-        ("models", ["tiers", "fast", "stated_training_cutoff"], "soon", "date"),
+        (
+            "models",
+            ["tiers", "fast", "primary", "supports_structured_outputs"],
+            False,
+            "structured",
+        ),
+        ("models", ["tiers", "probe", "primary", "slug"], "TODO/other", "probe"),
+        ("models", ["tiers", "fast", "primary", "stated_training_cutoff"], "soon", "date"),
         ("universe", ["market_cap_min_usd"], 6e10, "market_cap"),
         ("universe", ["top_n"], 0, "top_n"),
         ("pipeline", ["gate", "k"], 0, "k"),

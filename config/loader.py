@@ -32,15 +32,29 @@ class _Cfg(BaseModel):
 # --- models.yaml -----------------------------------------------------------------------------
 
 
-class ModelEntry(_Cfg):
+class ServedModel(_Cfg):
     slug: str = Field(min_length=1)
-    fallback_slugs: tuple[str, ...]
     stated_training_cutoff: date
     supports_structured_outputs: bool
 
+
+class ModelEntry(_Cfg):
+    primary: ServedModel
+    fallbacks: tuple[ServedModel, ...]
+
+    @property
+    def models(self) -> tuple[ServedModel, ...]:
+        return (self.primary, *self.fallbacks)
+
     @property
     def all_slugs(self) -> tuple[str, ...]:
-        return (self.slug, *self.fallback_slugs)
+        return tuple(model.slug for model in self.models)
+
+    @model_validator(mode="after")
+    def _unique_slugs(self) -> Self:
+        if len(set(self.all_slugs)) != len(self.all_slugs):
+            raise ValueError("duplicate model slug within tier")
+        return self
 
 
 class ModelsConfig(_Cfg):
@@ -51,9 +65,19 @@ class ModelsConfig(_Cfg):
         missing = set(ModelTier) - set(self.tiers)
         if missing:
             raise ValueError(f"missing tiers: {sorted(missing)}")
+        by_slug: dict[str, ServedModel] = {}
         for tier, entry in self.tiers.items():
-            if not entry.supports_structured_outputs:
-                raise ValueError(f"tier {tier.value} must support structured outputs (§10.1)")
+            for model in entry.models:
+                if not model.supports_structured_outputs:
+                    raise ValueError(
+                        f"model {model.slug} in tier {tier.value} must support "
+                        "structured outputs (§10.1)"
+                    )
+                if model.slug in by_slug and by_slug[model.slug] != model:
+                    raise ValueError(
+                        f"duplicate model slug {model.slug!r} has conflicting metadata"
+                    )
+                by_slug[model.slug] = model
         production = {
             s for t in (ModelTier.FAST, ModelTier.STRONG) for s in self.tiers[t].all_slugs
         }
@@ -62,7 +86,17 @@ class ModelsConfig(_Cfg):
         return self
 
     def latest_stated_cutoff(self) -> date:
-        return max(e.stated_training_cutoff for e in self.tiers.values())
+        return max(
+            model.stated_training_cutoff for entry in self.tiers.values() for model in entry.models
+        )
+
+    def model_for_response(self, response_model: str) -> ServedModel:
+        """Return metadata for an exact OpenRouter ``response.model`` value."""
+        for entry in self.tiers.values():
+            for model in entry.models:
+                if model.slug == response_model:
+                    return model
+        raise ValueError(f"unknown served model: {response_model!r}")
 
 
 # --- risk.yaml -------------------------------------------------------------------------------
