@@ -102,13 +102,15 @@ class AgentVerdict(BaseModel):
     as_of: datetime
     stance: Stance
     p_outperform: confloat(ge=0, le=1)   # P(beats sector ETF over horizon)
-    horizon_days: Literal[21, 63]
+    horizon_days: Horizon       # IntEnum: 21 | 63
     key_evidence: conlist(EvidenceRef, min_length=1, max_length=5)  # must cite input rows
     risks: conlist(str, max_length=3)
-    data_sufficiency: Literal["full", "partial", "insufficient"]
+    data_sufficiency: DataSufficiency   # enum: full | partial | insufficient
     prompt_version: str
     model_served: str           # from response.model, NOT the requested model
 ```
+
+**LLM-authored vs system-filled.** Only `stance`, `p_outperform`, `horizon_days`, `key_evidence`, `risks` and `data_sufficiency` come from the model (`AgentVerdictLLM`). `run_id`, `agent`, `entity_token`, `as_of`, `prompt_version` and `model_served` are filled in by `agents/base.py`. The strict `response_format` schema (§10.2) is the schema of `AgentVerdictLLM`, so the LLM can never write `model_served`. `RedTeamVerdict` and `CioDecision` are split the same way.
 
 `p_outperform` is the scored quantity. Asking for a probability instead of "confidence 0–100" makes calibration measurable. `key_evidence` must reference row IDs from the input partition, and the validator rejects citations to data the agent was not given. This catches leaks from the model's memory.
 
@@ -272,7 +274,7 @@ Pin exact model slugs in `config/models.yaml` with each model's **stated trainin
 ```python
 extra_body = {
   "response_format": {"type": "json_schema",
-                      "json_schema": {"name": "AgentVerdict", "strict": True, "schema": VERDICT_SCHEMA}},
+                      "json_schema": {"name": "AgentVerdictLLM", "strict": True, "schema": VERDICT_SCHEMA}},  # contracts/schemas/,
   "provider": {"require_parameters": True,          # only route to endpoints that honor the schema
                "data_collection": "deny"},
   "models": [PRIMARY, FALLBACK],                    # fallback on outage/rate-limit
