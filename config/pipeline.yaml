@@ -1,0 +1,21 @@
+# Run-level settings (§6, §7, §9, §10.2, §11).
+gate:
+  k: 15                        # names passed per run; fixes the LLM budget
+rebalance:
+  weekday: monday              # decisions committed from the prior Friday close
+  minutes_after_open: 30
+  timezone: America/New_York
+orders:
+  limit_offset_bps: 10         # marketable limit at mid +/- 10 bps
+  time_in_force_minutes: 15    # remainder converts to market
+committee:
+  logit_clip: [0.02, 0.98]
+  cold_start_min_verdicts: 100
+  weight_floor: 0.05           # SPEC-GAP: §7 names w_floor without a value
+horizons: [21, 63]             # §18.3: log both until the primary is picked
+llm:
+  temperature: 0
+  max_retries: 3
+  repair_attempts: 1
+budgets:
+  run_budget_usd: 10.0         # overridable with RUN_BUDGET_USD

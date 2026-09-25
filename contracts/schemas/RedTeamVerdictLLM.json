@@ -1,0 +1,68 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "bear_severity": {
+      "enum": [
+        "low",
+        "med",
+        "high"
+      ],
+      "type": "string"
+    },
+    "falsifiable_risk": {
+      "description": "One specific risk that can be checked against later data.",
+      "type": "string"
+    },
+    "horizon_days": {
+      "description": "Scoring horizon in trading days.",
+      "enum": [
+        21,
+        63
+      ],
+      "type": "integer"
+    },
+    "key_evidence": {
+      "description": "1 to 5 citations of input rows.",
+      "items": {
+        "additionalProperties": false,
+        "description": "A citation of one row in the agent's input partition.",
+        "properties": {
+          "note": {
+            "description": "What this row shows, in one sentence.",
+            "type": "string"
+          },
+          "row_id": {
+            "description": "Row ID exactly as shown in the input table.",
+            "type": "string"
+          },
+          "source": {
+            "description": "Input partition the cited row belongs to.",
+            "enum": [
+              "price_bars",
+              "fundamentals",
+              "insider_trades",
+              "news",
+              "regime",
+              "features"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "row_id",
+          "note"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "bear_severity",
+    "falsifiable_risk",
+    "horizon_days",
+    "key_evidence"
+  ],
+  "type": "object"
+}

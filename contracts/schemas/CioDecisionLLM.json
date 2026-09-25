@@ -1,0 +1,44 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "decisions": {
+      "description": "Exactly one decision per proposed name.",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "approve",
+              "veto",
+              "flag_for_review"
+            ],
+            "type": "string"
+          },
+          "entity_token": {
+            "type": "string"
+          },
+          "reason": {
+            "description": "Required for veto and flag_for_review; empty for approve.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "entity_token",
+          "action",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "rationale": {
+      "description": "Portfolio rationale for the dashboard.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "decisions",
+    "rationale"
+  ],
+  "type": "object"
+}

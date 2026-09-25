@@ -1,0 +1,8 @@
+# Rules-based point-in-time universe (§4.4), snapshotted monthly.
+# TODO(owner): choose the sector set and freeze it before the evaluation window (§18.2).
+sectors: []
+market_cap_min_usd: 500_000_000
+market_cap_max_usd: 50_000_000_000
+adv20_min_usd: 10_000_000
+price_min_usd: 5.0
+top_n: 40

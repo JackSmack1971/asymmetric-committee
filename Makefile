@@ -19,8 +19,10 @@ fmt:
 	uv run ruff check --fix .
 
 # Phase gates: each phase replaces its stub with the real acceptance check (§17).
-gate-P0:
-	@echo "gate-P0: not implemented"; exit 1
+# P0: lint + contract/config tests + exported LLM schemas are current.
+gate-P0: lint
+	uv run pytest tests/contracts tests/config
+	uv run python -m contracts.schema_export --check
 
 gate-P1:
 	@echo "gate-P1: not implemented"; exit 1
