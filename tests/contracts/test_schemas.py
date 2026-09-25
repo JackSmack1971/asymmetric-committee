@@ -12,7 +12,15 @@ from contracts.models import LLM_OUTPUT_MODELS, Contract
 
 IDS = [m.__name__ for m in LLM_OUTPUT_MODELS]
 # Fields the system fills; an LLM must never be asked for them (invariants 6, 7).
-FORBIDDEN_FIELDS = {"model_served", "run_id", "prompt_version", "as_of", "target_weight", "weight"}
+FORBIDDEN_FIELDS = {
+    "model_served",
+    "run_id",
+    "prompt_version",
+    "as_of",
+    "target_weight",
+    "weight",
+    "valid",
+}
 
 
 def walk_objects(node: Any, path: str = "$") -> list[tuple[str, dict[str, Any]]]:

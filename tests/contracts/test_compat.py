@@ -111,21 +111,27 @@ def test_pipeline_chain_validates() -> None:
             as_of=NOW,
             prompt_version="v1",
             model_served="x/y",
+            valid=True,
         )
         for a in sorted(enums.VOTING_AGENTS)
     ]
-    assert all(v.model_served == env["model_served"] for v in verdicts)
-    red = m.RedTeamVerdict(
-        run_id=run_id,
-        as_of=NOW,
-        prompt_version="v1",
-        model_served="x/y",
+    assert all(v.model_served == env["model_served"] and v.valid for v in verdicts)
+    red_out = m.RedTeamVerdictLLM(
         bear_severity=enums.BearSeverity.HIGH,
         falsifiable_risk="Gross margin falls below 40% next quarter",
         horizon_days=verdicts[0].horizon_days,
         key_evidence=(ev,),
-        entity_token="TICKER_01",
     )
+    red = m.RedTeamVerdict.from_llm(
+        red_out,
+        run_id=run_id,
+        entity_token="TICKER_01",
+        as_of=NOW,
+        prompt_version="v1",
+        model_served="x/y",
+        valid=True,
+    )
+    assert red.valid
     cd = m.CommitteeDecision(
         run_id=run_id,
         security_id=1,

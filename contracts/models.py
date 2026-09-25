@@ -126,6 +126,7 @@ class AgentVerdict(AgentVerdictLLM):
     as_of: AwareDatetime
     prompt_version: Label
     model_served: Label  # from response.model, never the requested model
+    valid: bool  # system-owned; cutoff validity is evaluated only for backtests
 
     @classmethod
     def from_llm(
@@ -138,6 +139,7 @@ class AgentVerdict(AgentVerdictLLM):
         as_of: datetime,
         prompt_version: str,
         model_served: str,
+        valid: bool,
     ) -> Self:
         return cls.model_validate(
             {
@@ -148,6 +150,7 @@ class AgentVerdict(AgentVerdictLLM):
                 "as_of": as_of,
                 "prompt_version": prompt_version,
                 "model_served": model_served,
+                "valid": valid,
             }
         )
 
@@ -165,6 +168,7 @@ class RedTeamVerdict(RedTeamVerdictLLM):
     as_of: AwareDatetime
     prompt_version: Label
     model_served: Label
+    valid: bool
 
     @classmethod
     def from_llm(
@@ -176,6 +180,7 @@ class RedTeamVerdict(RedTeamVerdictLLM):
         as_of: datetime,
         prompt_version: str,
         model_served: str,
+        valid: bool,
     ) -> Self:
         return cls.model_validate(
             {
@@ -185,6 +190,7 @@ class RedTeamVerdict(RedTeamVerdictLLM):
                 "as_of": as_of,
                 "prompt_version": prompt_version,
                 "model_served": model_served,
+                "valid": valid,
             }
         )
 

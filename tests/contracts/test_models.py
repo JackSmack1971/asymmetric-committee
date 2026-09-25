@@ -94,11 +94,19 @@ VERDICT: dict[str, Any] = {
     "data_sufficiency": DataSufficiency.FULL,
     "prompt_version": "v1",
     "model_served": "vendor/model-2026-01",
+    "valid": True,
 }
 
 
 def test_valid_verdict_fixture() -> None:
     m.AgentVerdict.model_validate(VERDICT)
+
+
+def test_verdict_requires_valid_flag() -> None:
+    # System-owned and fail-closed: a producer that omits `valid` must not validate.
+    payload = {k: v for k, v in VERDICT.items() if k != "valid"}
+    with pytest.raises(ValidationError, match="valid"):
+        m.AgentVerdict.model_validate(payload)
 
 
 @pytest.mark.parametrize(
