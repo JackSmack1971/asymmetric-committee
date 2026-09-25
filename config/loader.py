@@ -11,7 +11,7 @@ from typing import Annotated, Any, Self
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from contracts.enums import BearSeverity, Horizon, ModelTier
+from contracts.enums import BearSeverity, FeedName, Horizon, ModelTier
 from contracts.models import MAX_POSITION
 
 CONFIG_DIR = Path(__file__).parent
@@ -174,6 +174,7 @@ class PipelineConfig(_Cfg):
     horizons: tuple[Horizon, ...] = Field(min_length=1)
     llm: LlmConfig
     budgets: BudgetsConfig
+    freshness_sla_hours: dict[FeedName, PosFloat] = Field(min_length=1)
 
 
 # --- top level -------------------------------------------------------------------------------
@@ -227,3 +228,11 @@ def load_config(
     if not allow_placeholders and (found := _placeholders(cfg)):
         raise ConfigError("config still has placeholders:\n  " + "\n  ".join(found))
     return cfg
+
+
+def load_universe(path: Path) -> UniverseConfig:
+    """Validate one universe file (the backfill CLI takes ``--universe PATH``)."""
+    try:
+        return UniverseConfig.model_validate(_read_yaml(path))
+    except ValidationError as e:
+        raise ConfigError(f"invalid universe config {path}:\n{e}") from e

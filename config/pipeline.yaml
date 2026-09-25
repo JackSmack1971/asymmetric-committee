@@ -19,3 +19,10 @@ llm:
   repair_attempts: 1
 budgets:
   run_budget_usd: 10.0         # overridable with RUN_BUDGET_USD
+# Freshness SLAs in wall-clock hours since the feed's last successful ingest (§4.1 cadence, §13).
+# price_bars covers a weekend (Fri close -> Mon rebalance). Trading-calendar SLAs: P5.
+freshness_sla_hours:
+  price_bars: 72
+  fundamentals: 36
+  insider_trades: 36
+  news: 1

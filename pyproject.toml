@@ -25,6 +25,7 @@ dev = [
     "respx>=0.21",
     "celery-types>=0.22",
     "types-pyyaml>=6.0.12.20260906",
+    "import-linter>=2.15",
 ]
 
 [tool.uv]
@@ -36,12 +37,42 @@ target-version = "py312"
 extend-exclude = ["dashboard", "docs"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "TID"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"store._tables".msg = "store internals: read through store.as_of (invariant 2)"
+
+[tool.ruff.lint.per-file-ignores]
+"store/**" = ["TID251"]
+"tests/store/**" = ["TID251"]
 
 [tool.mypy]
 python_version = "3.12"
 strict = true
 exclude = ["dashboard/"]
+
+# Invariant 2: downstream code reads the DB only through store.as_of. It may not touch SQL,
+# drivers or store internals; decision-making code may not write facts or open connections.
+[tool.importlinter]
+root_packages = [
+    "agents", "api", "committee", "config", "contracts", "evaluation", "execution", "features",
+    "gate", "ingest", "orchestration", "risk", "store", "universe",
+]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Downstream code reads the DB only through store.as_of"
+type = "forbidden"
+source_modules = ["agents", "features", "gate", "committee", "risk", "evaluation", "universe"]
+forbidden_modules = ["sqlalchemy", "psycopg", "store._tables", "store.migrate"]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "Decision code neither writes facts nor opens connections"
+type = "forbidden"
+source_modules = ["agents", "gate", "committee", "risk"]
+forbidden_modules = ["store.write", "store.db", "ingest"]
+allow_indirect_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
