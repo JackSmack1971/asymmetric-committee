@@ -1,0 +1,71 @@
+<?xml version="1.0"?>
+<ownershipDocument>
+    <schemaVersion>X0508</schemaVersion>
+    <documentType>4</documentType>
+    <periodOfReport>2024-03-04</periodOfReport>
+    <aff10b5One>1</aff10b5One>
+    <issuer>
+        <issuerCik>0000900001</issuerCik>
+        <issuerName>Alfa Systems Inc</issuerName>
+        <issuerTradingSymbol>ALFA</issuerTradingSymbol>
+    </issuer>
+    <reportingOwner>
+        <reportingOwnerId>
+            <rptOwnerCik>0001111111</rptOwnerCik>
+            <rptOwnerName>Doe Jane</rptOwnerName>
+        </reportingOwnerId>
+        <reportingOwnerRelationship>
+            <isDirector>0</isDirector>
+            <isOfficer>1</isOfficer>
+            <isTenPercentOwner>0</isTenPercentOwner>
+            <isOther>0</isOther>
+            <officerTitle>Chief Financial Officer</officerTitle>
+        </reportingOwnerRelationship>
+    </reportingOwner>
+    <nonDerivativeTable>
+        <nonDerivativeTransaction>
+            <securityTitle><value>Common Stock</value></securityTitle>
+            <transactionDate><value>2024-03-04</value></transactionDate>
+            <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>S</transactionCode>
+                <equitySwapInvolved>0</equitySwapInvolved>
+            </transactionCoding>
+            <transactionAmounts>
+                <transactionShares><value>2500</value></transactionShares>
+                <transactionPricePerShare><value>41.37</value><footnoteId id="F1"/></transactionPricePerShare>
+                <transactionAcquiredDisposedCode><value>D</value></transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction><value>97500</value></sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature><directOrIndirectOwnership><value>D</value></directOrIndirectOwnership></ownershipNature>
+        </nonDerivativeTransaction>
+        <nonDerivativeTransaction>
+            <securityTitle><value>Common Stock</value></securityTitle>
+            <transactionDate><value>2024-03-04</value></transactionDate>
+            <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>F</transactionCode>
+                <equitySwapInvolved>0</equitySwapInvolved>
+            </transactionCoding>
+            <transactionAmounts>
+                <transactionShares><value>300</value></transactionShares>
+                <transactionPricePerShare><value>41.10</value></transactionPricePerShare>
+                <transactionAcquiredDisposedCode><value>D</value></transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction><value>97200</value></sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature><directOrIndirectOwnership><value>D</value></directOrIndirectOwnership></ownershipNature>
+        </nonDerivativeTransaction>
+        <nonDerivativeHolding>
+            <securityTitle><value>Common Stock</value></securityTitle>
+            <postTransactionAmounts><sharesOwnedFollowingTransaction><value>5000</value></sharesOwnedFollowingTransaction></postTransactionAmounts>
+            <ownershipNature><directOrIndirectOwnership><value>I</value></directOrIndirectOwnership></ownershipNature>
+        </nonDerivativeHolding>
+    </nonDerivativeTable>
+    <footnotes>
+        <footnote id="F1">Weighted average price; sales ranged from $41.02 to $41.80.</footnote>
+    </footnotes>
+</ownershipDocument>

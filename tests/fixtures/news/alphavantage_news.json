@@ -1,0 +1,5 @@
+{"items": "2", "sentiment_score_definition": "x <= -0.35: Bearish", "relevance_score_definition": "0 < x <= 1",
+ "feed": [
+  {"title": "Alfa Systems beats Q4 estimates", "url": "https://news.example.test/alfa-q4", "time_published": "20240215T164005", "authors": ["Staff"], "summary": "Revenue rose 12%.", "banner_image": null, "source": "Benzinga", "category_within_source": "News", "source_domain": "www.benzinga.com", "topics": [], "overall_sentiment_score": 0.31, "overall_sentiment_label": "Somewhat-Bullish", "ticker_sentiment": [{"ticker": "ALFA", "relevance_score": "0.9", "ticker_sentiment_score": "0.4", "ticker_sentiment_label": "Bullish"}]},
+  {"title": "Sector wrap", "url": "https://news.example.test/wrap", "time_published": "20240216T090000", "authors": [], "summary": "Mixed day.", "banner_image": null, "source": "Reuters", "category_within_source": "n/a", "source_domain": "www.reuters.com", "topics": [], "overall_sentiment_score": 0.0, "overall_sentiment_label": "Neutral", "ticker_sentiment": [{"ticker": "ZZZZ", "relevance_score": "0.2", "ticker_sentiment_score": "0.0", "ticker_sentiment_label": "Neutral"}]}
+ ]}

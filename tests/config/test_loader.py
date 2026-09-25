@@ -114,3 +114,18 @@ def test_missing_tier_fails(cfg_dir: Path) -> None:
     (cfg_dir / "models.yaml").write_text(yaml.safe_dump(data))
     with pytest.raises(ConfigError, match="missing tiers"):
         load_config(cfg_dir, allow_placeholders=True, env={})
+
+
+def test_freshness_slas_cover_every_ingested_feed() -> None:
+    from contracts.enums import FeedName
+
+    slas = load_config(allow_placeholders=True, env={}).pipeline.freshness_sla_hours
+    ingested = {FeedName.PRICE_BARS, FeedName.FUNDAMENTALS, FeedName.INSIDER_TRADES, FeedName.NEWS}
+    assert ingested <= set(slas)
+    assert all(h > 0 for h in slas.values())
+
+
+def test_load_universe_file() -> None:
+    from config.loader import load_universe
+
+    assert load_universe(CONFIG_DIR / "universe.yaml").top_n == 40

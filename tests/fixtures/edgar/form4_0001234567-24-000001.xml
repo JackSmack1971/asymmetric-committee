@@ -1,0 +1,62 @@
+<?xml version="1.0"?>
+<ownershipDocument>
+    <schemaVersion>X0407</schemaVersion>
+    <documentType>4</documentType>
+    <periodOfReport>2024-01-03</periodOfReport>
+    <issuer>
+        <issuerCik>0000900001</issuerCik>
+        <issuerName>Alfa Systems Inc</issuerName>
+        <issuerTradingSymbol>ALFA</issuerTradingSymbol>
+    </issuer>
+    <reportingOwner>
+        <reportingOwnerId>
+            <rptOwnerCik>0002222222</rptOwnerCik>
+            <rptOwnerName>Roe Richard</rptOwnerName>
+        </reportingOwnerId>
+        <reportingOwnerRelationship>
+            <isDirector>1</isDirector>
+        </reportingOwnerRelationship>
+    </reportingOwner>
+    <nonDerivativeTable>
+        <nonDerivativeTransaction>
+            <securityTitle><value>Common Stock</value></securityTitle>
+            <transactionDate><value>2024-01-03</value></transactionDate>
+            <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>S</transactionCode>
+                <equitySwapInvolved>0</equitySwapInvolved>
+                <footnoteId id="F1"/>
+            </transactionCoding>
+            <transactionAmounts>
+                <transactionShares><value>1000</value></transactionShares>
+                <transactionPricePerShare><value>38.00</value></transactionPricePerShare>
+                <transactionAcquiredDisposedCode><value>D</value></transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction><value>9000</value></sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature><directOrIndirectOwnership><value>D</value></directOrIndirectOwnership></ownershipNature>
+        </nonDerivativeTransaction>
+        <nonDerivativeTransaction>
+            <securityTitle><value>Common Stock</value></securityTitle>
+            <transactionDate><value>2024-01-03</value></transactionDate>
+            <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>P</transactionCode>
+                <equitySwapInvolved>0</equitySwapInvolved>
+            </transactionCoding>
+            <transactionAmounts>
+                <transactionShares><value>200</value></transactionShares>
+                <transactionPricePerShare><value>37.50</value></transactionPricePerShare>
+                <transactionAcquiredDisposedCode><value>A</value></transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction><value>9200</value></sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature><directOrIndirectOwnership><value>D</value></directOrIndirectOwnership></ownershipNature>
+        </nonDerivativeTransaction>
+    </nonDerivativeTable>
+    <footnotes>
+        <footnote id="F1">The sale was effected pursuant to a Rule 10b5-1 trading plan adopted on August 15, 2023.</footnote>
+    </footnotes>
+</ownershipDocument>
