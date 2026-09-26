@@ -1,0 +1,16 @@
+# SIC range -> sector -> SPDR sector ETF crosswalk (§4.1). GICS needs a license, so SIC is used.
+# TODO(owner): this is a first-pass draft. Confirm every range, then set `confirmed: true`.
+# Production startup fails while `confirmed` is false.
+confirmed: false
+sectors:
+  - {sector: energy, etf: XLE, sic_ranges: [[1200, 1399], [2900, 2999], [4610, 4619]]}
+  - {sector: materials, etf: XLB, sic_ranges: [[1000, 1199], [1400, 1499], [2600, 2699], [2800, 2829], [2870, 2899], [3300, 3399]]}
+  - {sector: industrials, etf: XLI, sic_ranges: [[1500, 1799], [3400, 3499], [3500, 3569], [3700, 3799], [4000, 4599], [7350, 7359]]}
+  - {sector: consumer_discretionary, etf: XLY, sic_ranges: [[2200, 2399], [3000, 3199], [3630, 3659], [5200, 5399], [5500, 5799], [7000, 7099], [7800, 7999]]}
+  - {sector: consumer_staples, etf: XLP, sic_ranges: [[100, 999], [2000, 2199], [2840, 2849], [5100, 5199], [5400, 5499]]}
+  - {sector: health_care, etf: XLV, sic_ranges: [[2830, 2839], [2850, 2869], [3840, 3859], [8000, 8099]]}
+  - {sector: financials, etf: XLF, sic_ranges: [[6000, 6499], [6700, 6799]]}
+  - {sector: information_technology, etf: XLK, sic_ranges: [[3570, 3629], [3660, 3699], [7370, 7379]]}
+  - {sector: communication_services, etf: XLC, sic_ranges: [[4800, 4899], [2710, 2799]]}
+  - {sector: utilities, etf: XLU, sic_ranges: [[4900, 4999]]}
+  - {sector: real_estate, etf: XLRE, sic_ranges: [[6500, 6599]]}

@@ -43,6 +43,8 @@ Read at the start of every session; update at the end. Spec: `docs/asymmetric-co
 - 2026-09-25 — P0 config: `ServedModel` gains required `rpm`, `tpm` (>0) and `input_/output_price_usd_per_mtok` (≥0). Local cost (tokens × config prices) is authoritative; provider `usage.cost` is only a fallback when token counts are missing; both missing → `UsageUnavailableError` (fail closed, run `PARTIAL`). Spec §10.1/§10.2 edited. Placeholder rpm/tpm/prices in `models.yaml` are TODO(owner).
 - 2026-09-25 -- P3 prep: anonymizer alias source. Identity aliases (name, ticker, CIK) come from stored `securities` via `store.as_of.alias_list` (listed-on-`as_of` only); brand/product aliases live in repo config `config/aliases.yaml` keyed by CIK. New contracts `Alias`/`SecurityAliases`/`AliasList` (+ `AliasKind`) in `contracts/data.py`. `agents/partitioner.py` holds only `AliasMasker` so far; data isolation is still P3. Shared aliases mask to `ENTITY_00`. Spec §12.1 edited. `tests/store/test_aliases.py::test_alias_list_is_point_in_time` needs Postgres and was skipped locally.
 
+- 2026-09-25 — P0 follow-up: `config/sectors.yaml` (SIC range → sector → SPDR ETF, §4.1) added with `SectorsConfig` in the loader; ranges must be disjoint. The draft crosswalk ships `confirmed: false`, so production startup fails until the owner reviews it and flips the flag.
+
 ## Open issues (P1–P2)
 
 - **Fixtures are synthetic.** This environment could not reach SEC/Alpaca/Alpha Vantage. Record real responses (`python -m ingest.backfill ... --record tests/fixtures/http`) and re-run the parser tests before trusting production ingestion.
