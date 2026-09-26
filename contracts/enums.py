@@ -129,6 +129,21 @@ class CioAction(StrEnum):
     FLAG_FOR_REVIEW = "flag_for_review"
 
 
+class SizingMode(StrEnum):
+    """Which sizing branch produced a book (§8.1)."""
+
+    RANK = "rank"
+    CALIBRATED = "calibrated"
+
+
+class KillTrigger(StrEnum):
+    """What halted trading (§9). Only MANUAL flattens."""
+
+    DAILY_LOSS = "daily_loss"
+    STALE_FEED = "stale_feed"
+    MANUAL = "manual"
+
+
 class Horizon(IntEnum):
     """Scoring horizon in trading days (§3.1, §18.3)."""
 

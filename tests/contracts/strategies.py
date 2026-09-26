@@ -16,9 +16,11 @@ from contracts.enums import (
     DataSufficiency,
     FeedName,
     Horizon,
+    KillTrigger,
     OrderSide,
     RunMode,
     RunStatus,
+    SizingMode,
     Stage,
     Stance,
 )
@@ -240,6 +242,7 @@ def run_record(draw: st.DrawFn) -> m.RunRecord:
         started_at=started,
         ended_at=ended,
         status_reason=draw(st.none() | short),
+        total_cost_usd=draw(nonneg),
     )
 
 
@@ -277,6 +280,111 @@ def agent_score(draw: st.DrawFn) -> m.AgentScore:
     )
 
 
+verdict_record = st.builds(
+    m.VerdictRecord,
+    security_id=security_id,
+    verdict=agent_verdict | red_team_verdict,
+    tokens_in=st.integers(0, 10**6),
+    tokens_out=st.integers(0, 10**6),
+    cost_usd=nonneg,
+    latency_ms=st.integers(0, 10**7),
+)
+committee_decision_record = st.builds(
+    m.CommitteeDecisionRecord,
+    decision=committee_decision,
+    pooled_logit=st.none() | floats(),
+    sizing_mode=st.none() | st.sampled_from(SizingMode),
+    cio_action=st.none() | st.sampled_from(CioAction),
+    rationale=st.none() | text(4000),
+)
+
+
+@st.composite
+def portfolio_snapshot(draw: st.DrawFn) -> m.PortfolioSnapshot:
+    book = draw(proposed_book)
+    return m.PortfolioSnapshot(
+        run_id=book.run_id,
+        as_of=book.as_of,
+        book=book,
+        cash_weight=book.cash_weight,
+        cio=draw(
+            st.none() | cio_decision.map(lambda c: c.model_copy(update={"run_id": book.run_id}))
+        ),
+    )
+
+
+dlq_record = st.builds(
+    m.DlqRecord,
+    run_id=uuids,
+    as_of=aware_dt,
+    agent=labels,
+    error_type=labels,
+    payload=st.dictionaries(labels, short, max_size=4),
+)
+
+
+@st.composite
+def kill_switch_event(draw: st.DrawFn) -> m.KillSwitchEvent:
+    trigger = draw(st.sampled_from(KillTrigger))
+    return m.KillSwitchEvent(
+        run_id=draw(uuids),
+        triggered_at=draw(aware_dt),
+        trigger=trigger,
+        daily_loss=draw(st.none() | floats(-1.0, 1.0)),
+        peak_drawdown=draw(st.none() | floats(0.0, 1.0)),
+        cancelled_order_ids=tuple(draw(st.lists(labels, max_size=5))),
+        flattened=trigger is KillTrigger.MANUAL and draw(st.booleans()),
+    )
+
+
+commitment_anchor = st.builds(
+    m.CommitmentAnchor,
+    run_id=uuids,
+    sha256=sha,
+    ots_proof=st.none() | st.binary(max_size=64),
+    git_commit=st.none() | labels,
+    anchored_at=aware_dt,
+    verified_at=st.none() | aware_dt,
+)
+
+
+@st.composite
+def step_artifacts(draw: st.DrawFn) -> m.StepArtifacts:
+    run = draw(run_record())
+    rid = run.run_id
+    snap = draw(st.none() | portfolio_snapshot())
+    if snap is not None:
+        snap = snap.model_copy(
+            update={
+                "run_id": rid,
+                "book": snap.book.model_copy(update={"run_id": rid}),
+                "cio": snap.cio.model_copy(update={"run_id": rid}) if snap.cio else None,
+            }
+        )
+    return m.StepArtifacts(
+        run=run,
+        verdicts=tuple(
+            v.model_copy(update={"verdict": v.verdict.model_copy(update={"run_id": rid})})
+            for v in draw(st.lists(verdict_record, max_size=3))
+        ),
+        decisions=tuple(
+            d.model_copy(update={"decision": d.decision.model_copy(update={"run_id": rid})})
+            for d in draw(st.lists(committee_decision_record, max_size=3))
+        ),
+        portfolio=snap,
+        commitment=draw(
+            st.none() | decision_commitment.map(lambda c: c.model_copy(update={"run_id": rid}))
+        ),
+        dlq=tuple(
+            d.model_copy(update={"run_id": rid}) for d in draw(st.lists(dlq_record, max_size=3))
+        ),
+        kill_switch=tuple(
+            k.model_copy(update={"run_id": rid})
+            for k in draw(st.lists(kill_switch_event(), max_size=2))
+        ),
+    )
+
+
 STRATEGIES: dict[type[m.Contract], st.SearchStrategy[Any]] = {
     m.EvidenceRef: evidence,
     m.AgentVerdictLLM: agent_verdict_llm,
@@ -302,4 +410,11 @@ STRATEGIES: dict[type[m.Contract], st.SearchStrategy[Any]] = {
     m.DecisionCommitment: decision_commitment,
     m.OutcomeRecord: outcome_record,
     m.AgentScore: agent_score(),
+    m.VerdictRecord: verdict_record,
+    m.CommitteeDecisionRecord: committee_decision_record,
+    m.PortfolioSnapshot: portfolio_snapshot(),
+    m.DlqRecord: dlq_record,
+    m.KillSwitchEvent: kill_switch_event(),
+    m.CommitmentAnchor: commitment_anchor,
+    m.StepArtifacts: step_artifacts(),
 }

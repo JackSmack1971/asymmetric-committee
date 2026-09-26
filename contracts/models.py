@@ -21,9 +21,11 @@ from contracts.enums import (
     DataSufficiency,
     FeedName,
     Horizon,
+    KillTrigger,
     OrderSide,
     RunMode,
     RunStatus,
+    SizingMode,
     Stage,
     Stance,
 )
@@ -418,6 +420,7 @@ class RunRecord(Contract):
     started_at: AwareDatetime
     ended_at: AwareDatetime | None = None
     status_reason: str | None = Field(default=None, max_length=1000)
+    total_cost_usd: NonNegative = 0.0
 
     @model_validator(mode="after")
     def _times(self) -> Self:
@@ -471,4 +474,109 @@ class AgentScore(Contract):
     def _window(self) -> Self:
         if self.window_end < self.window_start:
             raise ValueError("window_end before window_start")
+        return self
+
+
+# --- Persistence records (written only by orchestration/sink.py) -------------------------------
+
+
+class VerdictRecord(Contract):
+    """One stored agent or red-team verdict plus its call accounting."""
+
+    security_id: SecurityId
+    verdict: AgentVerdict | RedTeamVerdict
+    tokens_in: int = Field(ge=0)
+    tokens_out: int = Field(ge=0)
+    cost_usd: NonNegative
+    latency_ms: int = Field(ge=0)
+
+
+class CommitteeDecisionRecord(Contract):
+    """A committee decision with the pooling detail and CIO outcome the table also keeps."""
+
+    decision: CommitteeDecision
+    pooled_logit: Finite | None = None
+    sizing_mode: SizingMode | None = None
+    cio_action: CioAction | None = None
+    rationale: str | None = Field(default=None, max_length=4000)
+
+
+class PortfolioSnapshot(Contract):
+    """The final book after the CIO. Cash is the residual (§8.1), stored, never chosen."""
+
+    run_id: UUID
+    as_of: AwareDatetime
+    book: ProposedBook
+    cash_weight: Probability
+    cio: CioDecision | None = None
+
+    @model_validator(mode="after")
+    def _consistent(self) -> Self:
+        if self.book.run_id != self.run_id or self.book.as_of != self.as_of:
+            raise ValueError("book does not belong to this snapshot")
+        if abs(self.cash_weight - self.book.cash_weight) > 1e-9:
+            raise ValueError("cash_weight is not the residual of the book")
+        return self
+
+
+class DlqRecord(Contract):
+    run_id: UUID
+    as_of: AwareDatetime
+    agent: Label
+    error_type: Label
+    payload: dict[str, str] = Field(default_factory=dict)
+
+
+class KillSwitchEvent(Contract):
+    run_id: UUID
+    triggered_at: AwareDatetime
+    trigger: KillTrigger
+    daily_loss: Finite | None = None  # fraction vs prior close equity
+    peak_drawdown: Finite | None = None  # logged alongside, not a trigger
+    cancelled_order_ids: tuple[Label, ...] = ()
+    flattened: bool = False
+
+    @model_validator(mode="after")
+    def _only_manual_flattens(self) -> Self:
+        if self.flattened and self.trigger is not KillTrigger.MANUAL:
+            raise ValueError("only a manual halt flattens positions (§9)")
+        return self
+
+
+class CommitmentAnchor(Contract):
+    model_config = ConfigDict(
+        extra="forbid", frozen=True, ser_json_bytes="base64", val_json_bytes="base64"
+    )
+
+    run_id: UUID
+    sha256: Sha256Hex
+    ots_proof: bytes | None = None
+    git_commit: Label | None = None
+    anchored_at: AwareDatetime
+    verified_at: AwareDatetime | None = None
+
+
+class StepArtifacts(Contract):
+    """Everything one ``as_of`` step produced; the sink writes it in a single transaction."""
+
+    run: RunRecord
+    verdicts: tuple[VerdictRecord, ...] = ()
+    decisions: tuple[CommitteeDecisionRecord, ...] = ()
+    portfolio: PortfolioSnapshot | None = None
+    commitment: DecisionCommitment | None = None
+    dlq: tuple[DlqRecord, ...] = ()
+    kill_switch: tuple[KillSwitchEvent, ...] = ()
+
+    @model_validator(mode="after")
+    def _one_run(self) -> Self:
+        rid = self.run.run_id
+        ids = [v.verdict.run_id for v in self.verdicts]
+        ids += [d.decision.run_id for d in self.decisions] + [d.run_id for d in self.dlq]
+        ids += [k.run_id for k in self.kill_switch]
+        if self.portfolio:
+            ids.append(self.portfolio.run_id)
+        if self.commitment:
+            ids.append(self.commitment.run_id)
+        if any(i != rid for i in ids):
+            raise ValueError("artifact belongs to a different run")
         return self
