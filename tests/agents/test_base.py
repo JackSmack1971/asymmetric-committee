@@ -255,3 +255,76 @@ def test_backtest_run_flags_verdict_from_contaminated_fallback(value_part: Parti
     assert ok.verdict is not None and ok.verdict.valid is True
     assert flagged.verdict is not None and flagged.verdict.valid is False
     assert flagged.verdict.model_served == FALLBACK.slug  # persisted, just excluded downstream
+
+
+# --- per-call telemetry: measured, summed over repairs, never zero-filled ------------------------
+
+
+def test_telemetry_reports_measured_tokens_cost_and_latency(value_part: Partition) -> None:
+    client = Scripted(ChatResponse(PRIMARY.slug, _value_json(value_part), USAGE))
+    result = _run(client, value_part)
+    tel = result.telemetry
+    assert tel is not None
+    assert (tel.tokens_in, tel.tokens_out) == (1000, 200)
+    assert tel.cost_usd == pytest.approx(PRIMARY.local_cost_usd(1000, 200)) == result.cost_usd
+    assert isinstance(tel.latency_ms, int) and tel.latency_ms >= 0
+
+
+def test_telemetry_sums_a_repaired_verdicts_calls(value_part: Partition) -> None:
+    client = Scripted(
+        ChatResponse(PRIMARY.slug, "not json", USAGE),
+        ChatResponse(PRIMARY.slug, _value_json(value_part), USAGE),
+    )
+    tel = _run(client, value_part).telemetry
+    assert tel is not None
+    assert (tel.tokens_in, tel.tokens_out) == (2000, 400)
+    assert tel.cost_usd == pytest.approx(2 * PRIMARY.local_cost_usd(1000, 200))
+
+
+def test_telemetry_tokens_are_unknown_not_zero_when_only_provider_cost_is_reported(
+    value_part: Partition,
+) -> None:
+    client = Scripted(ChatResponse(PRIMARY.slug, _value_json(value_part), {"cost": 0.0123}))
+    tel = _run(client, value_part).telemetry
+    assert tel is not None
+    assert (tel.tokens_in, tel.tokens_out) == (None, None)
+    assert tel.cost_usd == pytest.approx(0.0123)  # provider cost is the documented fallback
+
+
+def test_cache_hit_telemetry_is_unknown_not_zero_tokens(value_part: Partition) -> None:
+    class Cache:
+        def __init__(self) -> None:
+            self.data: dict[str, str] = {}
+
+        def get(self, key: str) -> str | None:
+            return self.data.get(key)
+
+        def set(self, key: str, value: str) -> None:
+            self.data[key] = value
+
+    cache = Cache()
+
+    def call(client: Scripted) -> AgentCallResult:
+        return run_agent_call(
+            client,
+            models=MODELS,
+            mode=RunMode.LIVE,
+            run_id=uuid4(),
+            agent=AgentName.VALUE,
+            partition=value_part,
+            system_prompt="rubric",
+            prompt_version="v1",
+            requested_model=PRIMARY.slug,
+            config_hash="h",
+            cache=cache,
+        )
+
+    call(Scripted(ChatResponse(PRIMARY.slug, _value_json(value_part), USAGE)))
+    hit = call(Scripted())  # a second call would pop from an empty script and fail
+    assert hit.cache_hit and hit.telemetry is not None
+    assert hit.telemetry.cost_usd == 0.0  # nothing was billed
+    assert (hit.telemetry.tokens_in, hit.telemetry.tokens_out, hit.telemetry.latency_ms) == (
+        None,
+        None,
+        None,
+    )

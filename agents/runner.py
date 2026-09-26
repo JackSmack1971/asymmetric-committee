@@ -16,6 +16,7 @@ from uuid import UUID
 from agents.base import (
     AgentCallResult,
     BudgetExceededError,
+    CallTelemetry,
     ChatClient,
     DeadLetterQueue,
     RunBudget,
@@ -56,6 +57,7 @@ class RunnerResult:
     skipped: set[str] = field(default_factory=set)  # already COMPLETED, not re-run
     discarded: dict[str, str] = field(default_factory=dict)  # task key -> DiscardReason
     aborted: dict[str, str] = field(default_factory=dict)  # task key -> error class name
+    telemetry: dict[str, CallTelemetry] = field(default_factory=dict)  # completed key -> accounting
     cost_usd: float = 0.0
     cache_hits: int = 0
 
@@ -155,7 +157,10 @@ async def run_agents(
             reason = call.discard_reason.value if call.discard_reason else "discarded"
             result.discarded[key] = reason
             return
+        if call.telemetry is None:  # a verdict without accounting must never be stored as zero
+            raise RuntimeError(f"verdict for {key} returned without call telemetry")
         sink(call.verdict)
+        result.telemetry[key] = call.telemetry
         result.completed.add(key)
 
     await asyncio.gather(*(one(*j) for j in jobs))
