@@ -50,3 +50,37 @@ def test_a_raw_db_import_in_risk_is_rejected(tmp_path: Path, bad_import: str) ->
     result = _lint(tmp_path)
     assert result.returncode != 0
     assert "BROKEN" in result.stdout
+
+
+def _tree(tmp_path: Path, files: dict[str, str]) -> None:
+    shutil.copy(ROOT / "pyproject.toml", tmp_path)
+    cfg = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    for pkg in cfg["tool"]["importlinter"]["root_packages"]:
+        (tmp_path / pkg).mkdir()
+        (tmp_path / pkg / "__init__.py").write_text("")
+    (tmp_path / "store" / "_tables.py").write_text("")
+    (tmp_path / "store" / "write.py").write_text("")
+    for name, body in files.items():
+        (tmp_path / name).write_text(body)
+
+
+@pytest.mark.skipif(LINT is None, reason="import-linter not installed")
+def test_sink_is_the_only_orchestration_writer(tmp_path: Path) -> None:
+    _tree(tmp_path, {"orchestration/sink.py": "from store import write\n"})
+    assert _lint(tmp_path).returncode == 0
+
+
+@pytest.mark.skipif(LINT is None, reason="import-linter not installed")
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("orchestration/pipeline.py", "from store import write\n"),
+        ("execution/alpaca.py", "import sqlalchemy\n"),
+        ("execution/alpaca.py", "from store import write\n"),
+    ],
+)
+def test_other_modules_cannot_write_or_open_the_db(tmp_path: Path, path: str, body: str) -> None:
+    _tree(tmp_path, {path: body})
+    result = _lint(tmp_path)
+    assert result.returncode != 0
+    assert "BROKEN" in result.stdout
