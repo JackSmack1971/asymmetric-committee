@@ -212,3 +212,12 @@ class McapTier(StrEnum):
     SMALL = "small"  # < $2B
     MID = "mid"  # $2B to $10B
     LARGE = "large"  # >= $10B
+
+
+class AliasKind(StrEnum):
+    """Where an anonymizer alias came from (invariant 4)."""
+
+    NAME = "name"
+    TICKER = "ticker"
+    CIK = "cik"
+    BRAND = "brand"

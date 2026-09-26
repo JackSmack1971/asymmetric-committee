@@ -1,0 +1,8 @@
+# Brand / product aliases the anonymizer must mask (invariant 4), keyed by SEC CIK.
+# Company name, ticker and CIK come from the stored `securities` table; only what cannot be
+# derived from it (brands, product lines, common short names) belongs here. See blueprint §12.1.
+# Entries for a CIK that is not listed at `as_of` are ignored, so adding a future listing is safe.
+# Example:
+#   - cik: 1234567
+#     aliases: ["Widget Pro", "Acme Cloud"]
+brands: []
