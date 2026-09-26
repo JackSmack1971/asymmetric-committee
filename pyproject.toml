@@ -13,6 +13,7 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "httpx>=0.27",
     "pyyaml>=6.0.3",
+    "opentimestamps>=0.4.5",
 ]
 
 [dependency-groups]
@@ -34,7 +35,8 @@ package = false
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = ["dashboard", "docs"]
+# .agents/ holds the owner's agent skill scripts, not project code (see PROGRESS).
+extend-exclude = ["dashboard", "docs", ".agents"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "TID"]
@@ -50,6 +52,11 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "TID"]
 python_version = "3.12"
 strict = true
 exclude = ["dashboard/"]
+
+# opentimestamps and python-bitcoinlib ship no type information.
+[[tool.mypy.overrides]]
+module = ["opentimestamps.*", "bitcoin.*"]
+ignore_missing_imports = true
 
 # Invariant 2: downstream code reads the DB only through store.as_of. It may not touch SQL,
 # drivers or store internals; decision-making code may not write facts or open connections.
@@ -85,6 +92,14 @@ forbidden_modules = ["store.write"]
 allow_indirect_imports = true
 ignore_imports = ["orchestration.sink -> store.write"]
 unmatched_ignore_imports_alerting = "none"
+
+# P5: orchestration reads fact tables only through store.as_of (the loader), never table objects.
+[[tool.importlinter.contracts]]
+name = "Orchestration reads facts only through store.as_of"
+type = "forbidden"
+source_modules = ["orchestration"]
+forbidden_modules = ["store._tables", "store.migrate"]
+allow_indirect_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
