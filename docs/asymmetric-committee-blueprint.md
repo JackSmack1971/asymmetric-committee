@@ -185,13 +185,16 @@ fundamentals_asfiled  (security_id, concept, unit, period_start, period_end, fis
 insider_txns          (security_id, filer, role, txn_date, code, shares, price, post_holdings, is_10b5_1, routine_flag, accession, available_at)
 news_items            (item_id, security_ids[], published_at, headline, summary, body_hash, source, is_analyst_rating, available_at, revision)
 features              hypertable (security_id, as_of, feature_set_version, jsonb)
-runs                  (run_id, mode[live|backtest|ablation], as_of, config_hash, status, started_at, ended_at)
+runs                  (run_id, mode[live|backtest|ablation], as_of, config_hash, status, status_reason, total_cost_usd, started_at, ended_at)
 gate_decisions        (run_id, security_id, score, passed, components jsonb)
 agent_verdicts        (run_id, security_id, agent, verdict jsonb, tokens_in, tokens_out, cost_usd, cost_source, latency_ms)
-committee_decisions   (run_id, security_id, horizon, pooled_logit, p_pool, dispersion, sizing_mode, target_weight, cio_action, rationale)
+committee_decisions   (run_id, security_id, horizon, pooled_logit, pooled_p, dispersion, sizing_mode, bear_severity, weights jsonb, target_weight, cio_action, rationale)   -- unique (run_id, security_id, horizon)
+portfolio_snapshots   (run_id, as_of, cash_weight, book jsonb, cio jsonb)   -- final book after the CIO; cash is the stored residual
+dlq_records           (run_id, as_of, agent, error_type, payload jsonb, dedupe_key)   -- failed or aborted tasks; replays are no-ops
+kill_switch_events    (run_id, triggered_at, trigger[daily_loss|stale_feed|manual], daily_loss, peak_drawdown, cancelled_order_ids[], flattened, dedupe_key)   -- run goes PARTIAL; only a manual halt flattens
 calibration_models    (fit_id, horizon, fitted_at, alpha, beta, weights jsonb, n_periods, effective_n, config jsonb)
 decision_commitments  (run_id, sha256, committed_at)   -- append-only
-commitment_anchors    (run_id, sha256, ots_proof bytea, git_commit, anchored_at, verified_at)
+commitment_anchors    (run_id, sha256, ots_proof bytea, git_commit, anchored_at, verified_at)   -- hash fixed; the proof is upgraded later
 orders / fills        (run_id, broker_order_id, ..., reference_price, reference_source, fill_price, slippage_bps)
 outcomes              (run_id, security_id, horizon, entry_ref_price, fwd_return, sector_fwd_return, scored_at)
 agent_scores          (agent, model_served, horizon, window, brier, brier_skill_vs_base, ic, hit_rate, n, n_effective)
@@ -201,6 +204,8 @@ ablation_results      (ablation, trial_id, window, metrics jsonb)
 sequential_state      (comparison, week, e_value, running_mean, lambda, state)
 feed_health           (feed, last_success_at, last_available_at, rows, last_error)   -- freshness SLA (§13)
 ```
+
+Run outputs (`agent_verdicts` through `commitment_anchors`) are written only by `orchestration/sink.py`, one transaction per `as_of` step; import-linter enforces it. `p_pool` is stored as `pooled_p`.
 
 Every fact table also carries the §4.2 columns (`event_time`, `available_at`, `ingested_at`, `source_version`). `period_start` is needed because quarterly and year-to-date facts share `period_end` and accession. Sector lives in `universe_snapshots` (derived from `sic_history` as of the snapshot date), not on `securities`, so a sector change can't leak backwards.
 
@@ -352,7 +357,7 @@ The quant baseline goes through the **same mode** on its own composite, with its
 - **Logging:** decision price, reference price, fill price and slippage in bps.
 - **Paper realism.** Paper fills ignore queue position and market impact, give random partial fills about 10% of the time, and do not credit dividends. **Paper slippage is therefore not evidence of real costs.** The evaluator charges a modeled cost of half the estimated effective spread (§5) + 5 bps per side, and adds dividends from corporate actions.
 - **Return timing.** Every forward return is measured from the Monday execution reference price, not from Friday's close: committee, baseline, every benchmark, and IC outcomes alike. The weekend gap is not tradable, so crediting it would inflate everything equally and distort the comparisons.
-- **Kill switch.** Halt if the daily loss exceeds 3%, if any data feed is stale beyond its SLA, or on a manual command (flatten on manual). The rule is **pre-registered** and applied identically to every benchmark book: when the committee halts, the benchmarks move to T-bills too. Stop rules help only when returns trend and hurt under a random walk (Kaminski & Lo 2014), so an unadjusted comparison would credit the cash-out rule to stock selection. Report both adjusted and unadjusted comparisons.
+- **Kill switch.** Halt if the daily loss exceeds 3%, if any data feed is stale beyond its SLA, or on a manual command (flatten on manual). The rule is **pre-registered** and applied identically to every benchmark book: when the committee halts, the benchmarks move to T-bills too. Stop rules help only when returns trend and hurt under a random walk (Kaminski & Lo 2014), so an unadjusted comparison would credit the cash-out rule to stock selection. An automatic halt (daily loss, stale feed) cancels open orders and stops new ones; only the manual command flattens. Daily loss is measured against the prior close, and peak drawdown is logged alongside but is not a trigger. A halt marks the run `PARTIAL` and writes a `kill_switch_events` row; `RunStatus` gains no new value. Backtests are never executed (they stop at `COMMITTED`); execution and the kill switch are live-only. Report both adjusted and unadjusted comparisons.
 - **Live trading:** out of scope. If added later, it requires human approval per rebalance and separate keys.
 
 ---
