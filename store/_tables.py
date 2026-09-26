@@ -16,6 +16,7 @@ from sqlalchemy import (
     DateTime,
     Double,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     LargeBinary,
@@ -243,10 +244,10 @@ agent_verdicts = Table(
     _sid(),
     Column("agent", Text, nullable=False),
     Column("verdict", JSONB, nullable=False),
-    Column("tokens_in", Integer, nullable=False),
-    Column("tokens_out", Integer, nullable=False),
+    Column("tokens_in", Integer),
+    Column("tokens_out", Integer),
     Column("cost_usd", Double, nullable=False),
-    Column("latency_ms", Integer, nullable=False),
+    Column("latency_ms", Integer),
     UniqueConstraint("run_id", "security_id", "agent", name="uq_agent_verdicts"),
 )
 
@@ -256,6 +257,9 @@ committee_decisions = Table(
     _run_id(),
     _sid(),
     Column("horizon", Integer, nullable=False),
+    # Needed to rebuild the committed CommitteeDecision and recompute its hash; NULL on rows that
+    # predate 0006, which therefore cannot be verified (fail closed).
+    Column("entity_token", Text),
     Column("pooled_p", Double, nullable=False),
     Column("pooled_logit", Double),
     Column("dispersion", Double, nullable=False),
@@ -316,6 +320,7 @@ decision_commitments = Table(
     Column("run_id", UUID(as_uuid=True), ForeignKey("runs.run_id"), primary_key=True),
     Column("sha256", Text, nullable=False),
     Column("committed_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    UniqueConstraint("run_id", "sha256", name="uq_decision_commitments_run_sha"),
 )
 
 # External anchor of the commitment (§12.2). The hash never changes; the proof is upgraded later.
@@ -328,6 +333,25 @@ commitment_anchors = Table(
     Column("git_commit", Text),
     _ts("anchored_at"),
     _ts("verified_at", nullable=True),
+    # An anchor can only ever be of the run's own commitment hash.
+    ForeignKeyConstraint(
+        ["run_id", "sha256"],
+        ["decision_commitments.run_id", "decision_commitments.sha256"],
+        name="fk_commitment_anchors_commitment",
+    ),
+)
+
+# Append-only audit of operator resets (pre-commitment runs only). What was cleared is kept here.
+run_resets = Table(
+    "run_resets",
+    metadata,
+    Column("reset_id", BigInteger, primary_key=True, autoincrement=True),
+    Column("run_id", UUID(as_uuid=True), ForeignKey("runs.run_id"), nullable=False),
+    _ts("reset_at"),
+    Column("actor", Text, nullable=False),
+    Column("reason", Text, nullable=False),
+    Column("prior_status", Text, nullable=False),
+    Column("cleared", JSONB, nullable=False),
 )
 
 orders = Table(
@@ -341,6 +365,17 @@ orders = Table(
     Column("limit_price", Double),
     Column("status", Text, nullable=False),
     _ts("submitted_at"),
+    # P5 step 4 execution evidence (§9): one row per broker order, updated as the broker reports.
+    Column("client_order_id", Text, nullable=False),
+    Column("kind", Text, nullable=False),
+    Column("filled_qty", Double, nullable=False),
+    Column("decision_price", Double, nullable=False),
+    Column("reference_price", Double, nullable=False),
+    Column("reference_source", Text, nullable=False),
+    Column("fill_price", Double),
+    Column("slippage_bps", Double),
+    _ts("filled_at", nullable=True),
+    UniqueConstraint("client_order_id", name="orders_client_order_id_key"),
 )
 
 fills = Table(
@@ -390,4 +425,4 @@ FACT_TABLES: tuple[Table, ...] = (
     universe_snapshots,
 )
 HYPERTABLES: tuple[Table, ...] = (price_bars, features)
-IMMUTABLE_TABLES: tuple[Table, ...] = (fundamentals_asfiled, decision_commitments)
+IMMUTABLE_TABLES: tuple[Table, ...] = (fundamentals_asfiled, decision_commitments, run_resets)

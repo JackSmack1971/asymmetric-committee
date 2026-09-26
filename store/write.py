@@ -5,15 +5,18 @@ New information (a restatement, a revised article, a SIP bar) is always a new ro
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Iterable, Mapping, Sequence
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from enum import Enum
 from typing import Any
+from uuid import UUID
 
 from pydantic import BaseModel
-from sqlalchemy import Connection, Table, func, literal, select
+from sqlalchemy import Connection, Table, and_, delete, func, literal, not_, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 
+from contracts.commitment import CommitmentIntegrityError, CommitmentMaterial
 from contracts.data import (
     FeatureRow,
     FundamentalFact,
@@ -22,16 +25,34 @@ from contracts.data import (
     PriceBar,
     UniverseMember,
 )
-from contracts.enums import FeedName
+from contracts.enums import (
+    HALT_REASON_PREFIX,
+    TERMINAL_ORDER_STATUSES,
+    AgentName,
+    BearSeverity,
+    CioAction,
+    FeedName,
+    Horizon,
+    RunMode,
+    RunStatus,
+    SizingMode,
+    halt_reason,
+)
+from contracts.errors import AnchorIncompleteError, ResetRefusedError, RunHaltedError
 from contracts.models import (
+    AgentVerdict,
+    AgentWeight,
     CommitmentAnchor,
+    CommitteeDecision,
     CommitteeDecisionRecord,
     DecisionCommitment,
     DlqRecord,
+    ExecutionRecord,
     GateDecision,
     KillSwitchEvent,
     PortfolioSnapshot,
     ProposedBook,
+    RedTeamVerdict,
     RunRecord,
     VerdictRecord,
 )
@@ -216,21 +237,78 @@ def _dedupe_key(model: BaseModel) -> str:
     return hashlib.sha256(model.model_dump_json().encode()).hexdigest()
 
 
+_ADVANCED = (
+    RunStatus.COMMITTED.value,
+    RunStatus.ANCHORED.value,
+    RunStatus.EXECUTED.value,
+    RunStatus.SCORED.value,
+)
+_REGRESSIVE = (RunStatus.PENDING.value, RunStatus.PARTIAL.value, RunStatus.FAILED.value)
+# The only states the audited halt transition may leave (§9, §11).
+_HALTABLE = (RunStatus.COMMITTED.value, RunStatus.ANCHORED.value, RunStatus.EXECUTED.value)
+
+
 def upsert_run(conn: Connection, run: RunRecord) -> None:
-    """Create the run or move it forward: status, end time, reason and cost are the mutable part."""
+    """Create the run or move it forward: status, end time, reason and cost are the mutable part.
+
+    A run that already reached ``COMMITTED`` or later is never demoted to ``PENDING``, ``PARTIAL``
+    or ``FAILED``: a late failure report (or a duplicate worker) cannot un-commit a book. A run a
+    kill-switch halt moved to ``PARTIAL`` is terminal: nothing overwrites it (recovery = new run).
+    """
     stmt = insert(t.runs).values(_row(run, t.runs))
-    ex = stmt.excluded
+    ex, c = stmt.excluded, t.runs.c
     conn.execute(
         stmt.on_conflict_do_update(
-            index_elements=[t.runs.c.run_id],
+            index_elements=[c.run_id],
             set_={
                 "status": ex.status,
                 "ended_at": ex.ended_at,
                 "status_reason": ex.status_reason,
                 "total_cost_usd": ex.total_cost_usd,
             },
+            where=not_(
+                or_(
+                    and_(c.status.in_(_ADVANCED), ex.status.in_(_REGRESSIVE)),
+                    and_(
+                        c.status == RunStatus.PARTIAL.value,
+                        c.status_reason.startswith(HALT_REASON_PREFIX, autoescape=True),
+                    ),
+                )
+            ),
         )
     )
+
+
+def load_run(conn: Connection, run_id: UUID) -> RunRecord | None:
+    row = conn.execute(select(t.runs).where(t.runs.c.run_id == run_id)).one_or_none()
+    return None if row is None else RunRecord.model_validate(dict(row._mapping))
+
+
+def load_verdicts(conn: Connection, run_id: UUID) -> list[VerdictRecord]:
+    """Stored verdicts of a run. A row exists only for work that COMPLETED (invariant 8)."""
+    c = t.agent_verdicts.c
+    out: list[VerdictRecord] = []
+    for r in conn.execute(select(t.agent_verdicts).where(c.run_id == run_id).order_by(c.agent)):
+        m = r._mapping
+        model = RedTeamVerdict if m["agent"] == AgentName.RED_TEAM.value else AgentVerdict
+        out.append(
+            VerdictRecord(
+                security_id=m["security_id"],
+                verdict=model.model_validate(m["verdict"]),
+                tokens_in=m["tokens_in"],
+                tokens_out=m["tokens_out"],
+                cost_usd=m["cost_usd"],
+                latency_ms=m["latency_ms"],
+            )
+        )
+    return out
+
+
+def load_book(conn: Connection, run_id: UUID) -> ProposedBook | None:
+    """The committed final book of a run, if one was stored."""
+    c = t.portfolio_snapshots.c
+    raw = conn.execute(select(c.book).where(c.run_id == run_id)).scalar_one_or_none()
+    return None if raw is None else ProposedBook.model_validate(raw)
 
 
 def _insert_rows(conn: Connection, table: Table, rows: Sequence[dict[str, Any]]) -> int:
@@ -269,6 +347,7 @@ def insert_committee_decisions(conn: Connection, records: Sequence[CommitteeDeci
                 "run_id": d.run_id,
                 "security_id": d.security_id,
                 "horizon": int(d.horizon_days),
+                "entity_token": d.entity_token,
                 "pooled_p": d.pooled_p,
                 "pooled_logit": r.pooled_logit,
                 "dispersion": d.dispersion,
@@ -337,6 +416,51 @@ def insert_kill_switch_events(conn: Connection, events: Sequence[KillSwitchEvent
     )
 
 
+def load_kill_switch_events(conn: Connection, run_id: UUID) -> list[KillSwitchEvent]:
+    """Every stored halt of a run, oldest first: the durable source of the kill-switch state."""
+    c = t.kill_switch_events.c
+    rows = conn.execute(
+        select(t.kill_switch_events).where(c.run_id == run_id).order_by(c.triggered_at, c.event_id)
+    ).mappings()
+    return [
+        KillSwitchEvent.model_validate(
+            {**{k: r[k] for k in KillSwitchEvent.model_fields if k in r}}
+            | {"cancelled_order_ids": tuple(r["cancelled_order_ids"])}
+        )
+        for r in rows
+    ]
+
+
+def load_commitment(conn: Connection, run_id: UUID) -> DecisionCommitment | None:
+    c = t.decision_commitments
+    row = conn.execute(select(c).where(c.c.run_id == run_id)).mappings().first()
+    return None if row is None else DecisionCommitment.model_validate(dict(row))
+
+
+def load_commitment_hash(conn: Connection, run_id: UUID) -> str | None:
+    c = t.decision_commitments.c
+    return conn.execute(select(c.sha256).where(c.run_id == run_id)).scalar_one_or_none()
+
+
+def load_snapshot(conn: Connection, run_id: UUID) -> PortfolioSnapshot | None:
+    """The committed final book with its CIO decision, if one was stored."""
+    c = t.portfolio_snapshots.c
+    row = conn.execute(select(t.portfolio_snapshots).where(c.run_id == run_id)).mappings().first()
+    return None if row is None else PortfolioSnapshot.model_validate(dict(row))
+
+
+def advance_to_executed(conn: Connection, run_id: UUID, ended_at: datetime) -> bool:
+    """``ANCHORED -> EXECUTED`` as one conditional update. True only for the call that moved it,
+    so a replay or a second worker cannot advance (or report advancing) the run twice."""
+    c = t.runs.c
+    result = conn.execute(
+        update(t.runs)
+        .where(c.run_id == run_id, c.status == RunStatus.ANCHORED.value)
+        .values(status=RunStatus.EXECUTED.value, ended_at=ended_at, status_reason=None)
+    )
+    return result.rowcount == 1
+
+
 def insert_commitment(conn: Connection, commitment: DecisionCommitment) -> int:
     """Append-only (trigger). Replaying the same hash is a no-op; a different hash raises."""
     n = _insert(conn, t.decision_commitments, [commitment])
@@ -365,3 +489,334 @@ def upsert_anchor(conn: Connection, anchor: CommitmentAnchor) -> None:
     ).returning(literal(1))
     if not conn.execute(stmt).all():
         raise AnchorMismatchError(f"run {anchor.run_id} is already anchored to a different hash")
+
+
+# --- integrity, anchoring, halts, claims, resets (P5 step 5) -----------------------------------
+
+
+def load_anchor(conn: Connection, run_id: UUID) -> CommitmentAnchor | None:
+    c = t.commitment_anchors.c
+    row = conn.execute(select(t.commitment_anchors).where(c.run_id == run_id)).mappings().first()
+    return None if row is None else CommitmentAnchor.model_validate(dict(row))
+
+
+def load_decisions(conn: Connection, run: RunRecord) -> list[CommitteeDecisionRecord]:
+    """Stored committee decisions rebuilt as the records that were hashed, or raise.
+
+    A row without ``entity_token`` (written before migration 0006) cannot be rebuilt, so the
+    commitment of such a run cannot be verified: that is an integrity failure, not a skip.
+    """
+    c = t.committee_decisions.c
+    out: list[CommitteeDecisionRecord] = []
+    query = (
+        select(t.committee_decisions)
+        .where(c.run_id == run.run_id)
+        .order_by(c.security_id, c.horizon)
+    )
+    for r in conn.execute(query).mappings():
+        if r["entity_token"] is None:
+            raise CommitmentIntegrityError(
+                f"run {run.run_id}: decision for security {r['security_id']} has no entity_token"
+            )
+        try:
+            out.append(
+                CommitteeDecisionRecord(
+                    decision=CommitteeDecision(
+                        run_id=run.run_id,
+                        security_id=r["security_id"],
+                        entity_token=r["entity_token"],
+                        as_of=run.as_of,
+                        horizon_days=Horizon(r["horizon"]),
+                        pooled_p=r["pooled_p"],
+                        dispersion=r["dispersion"],
+                        agent_weights=tuple(AgentWeight.model_validate(w) for w in r["weights"]),
+                        bear_severity=BearSeverity(r["bear_severity"])
+                        if r["bear_severity"]
+                        else None,
+                        target_weight=r["target_weight"],
+                    ),
+                    pooled_logit=r["pooled_logit"],
+                    sizing_mode=SizingMode(r["sizing_mode"]) if r["sizing_mode"] else None,
+                    cio_action=CioAction(r["cio_action"]) if r["cio_action"] else None,
+                    rationale=r["rationale"],
+                )
+            )
+        except ValueError as exc:
+            raise CommitmentIntegrityError(
+                f"run {run.run_id}: stored decision invalid: {exc}"
+            ) from exc
+    return out
+
+
+def load_commitment_material(conn: Connection, run_id: UUID) -> CommitmentMaterial | None:
+    """Rows needed to recompute a commitment; ``None`` when the run has no commitment row.
+
+    Call inside one REPEATABLE READ transaction so run, decisions, book and commitment are one
+    consistent view.
+    """
+    run = load_run(conn, run_id)
+    commitment = load_commitment(conn, run_id)
+    if run is None or commitment is None:
+        return None
+    try:  # rows that no longer validate are as untrustworthy as rows that hash differently
+        snapshot = load_snapshot(conn, run_id)
+        if snapshot is None:
+            raise CommitmentIntegrityError(f"run {run_id} is committed but has no stored book")
+        return CommitmentMaterial(
+            run=run,
+            decisions=tuple(load_decisions(conn, run)),
+            snapshot=snapshot,
+            stored_sha256=commitment.sha256,
+            committed_at=commitment.committed_at,
+            anchor=load_anchor(conn, run_id),
+        )
+    except CommitmentIntegrityError:
+        raise
+    except ValueError as exc:
+        raise CommitmentIntegrityError(f"run {run_id}: stored rows are invalid: {exc}") from exc
+
+
+def advance_to_anchored(conn: Connection, anchor: CommitmentAnchor) -> bool:
+    """Store the anchor and move ``COMMITTED -> ANCHORED`` in the caller's transaction.
+
+    True only for the call that made the transition. The composite foreign key guarantees the
+    anchor names this run's own commitment hash.
+    """
+    if anchor.ots_proof is None or anchor.git_commit is None:
+        raise AnchorIncompleteError("ANCHORED needs an OpenTimestamps proof and a git commit")
+    upsert_anchor(conn, anchor)
+    c = t.runs.c
+    result = conn.execute(
+        update(t.runs)
+        .where(c.run_id == anchor.run_id, c.status == RunStatus.COMMITTED.value)
+        .values(status=RunStatus.ANCHORED.value)
+    )
+    return result.rowcount == 1
+
+
+def record_halt(conn: Connection, event: KillSwitchEvent) -> bool:
+    """The audited halt transition (§9): event row and ``-> PARTIAL`` in one transaction.
+
+    Only ``COMMITTED``, ``ANCHORED`` and ``EXECUTED`` runs move; every evidence row is kept.
+    True when this call moved the run.
+    """
+    insert_kill_switch_events(conn, (event,))
+    c = t.runs.c
+    result = conn.execute(
+        update(t.runs)
+        .where(c.run_id == event.run_id, c.status.in_(_HALTABLE))
+        .values(
+            status=RunStatus.PARTIAL.value,
+            status_reason=halt_reason(event.trigger),
+            ended_at=event.triggered_at,
+        )
+    )
+    return result.rowcount == 1
+
+
+_ACTIVE = (
+    RunStatus.PENDING.value,
+    RunStatus.INGEST_OK.value,
+    RunStatus.FEATURES_OK.value,
+    RunStatus.GATED.value,
+    RunStatus.AGENTS_OK.value,
+    RunStatus.COMMITTED.value,
+    RunStatus.ANCHORED.value,
+    RunStatus.EXECUTED.value,
+    RunStatus.SCORED.value,
+)
+
+
+def claim_run(
+    conn: Connection,
+    *,
+    mode: RunMode,
+    as_of: datetime,
+    config_hash: str,
+    run_id: UUID,
+    started_at: datetime,
+    fresh: bool = False,
+) -> tuple[RunRecord, bool]:
+    """One run per ``(mode, as_of, config)`` however many workers ask (Postgres advisory lock).
+
+    Returns the newest run that is in progress or finished, else creates a ``PENDING`` run with
+    ``run_id``. A failed or budget-``PARTIAL`` run never blocks a new one. A run halted by the
+    kill switch does: a new run for that ``as_of`` needs ``fresh=True`` (an operator decision).
+    """
+    key = f"{mode.value}|{as_of.astimezone(UTC).isoformat()}|{config_hash}"
+    conn.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(key, 0))))
+    c = t.runs.c
+    rows = (
+        conn.execute(
+            select(t.runs)
+            .where(c.mode == mode.value, c.as_of == as_of, c.config_hash == config_hash)
+            .order_by(c.started_at.desc())
+        )
+        .mappings()
+        .all()
+    )
+    runs = [RunRecord.model_validate(dict(r)) for r in rows]
+    for r in runs:
+        if r.status.value in _ACTIVE:
+            return r, False
+    if not fresh and any((r.status_reason or "").startswith(HALT_REASON_PREFIX) for r in runs):
+        raise RunHaltedError(f"a run for {as_of.isoformat()} was halted by the kill switch")
+    run = RunRecord(
+        run_id=run_id,
+        mode=mode,
+        as_of=as_of,
+        config_hash=config_hash,
+        status=RunStatus.PENDING,
+        started_at=started_at,
+    )
+    insert_run(conn, run)
+    return run, True
+
+
+def list_runs(conn: Connection, *, mode: RunMode, statuses: Sequence[RunStatus]) -> list[RunRecord]:
+    c = t.runs.c
+    rows = conn.execute(
+        select(t.runs)
+        .where(c.mode == mode.value, c.status.in_([s.value for s in statuses]))
+        .order_by(c.as_of, c.started_at)
+    ).mappings()
+    return [RunRecord.model_validate(dict(r)) for r in rows]
+
+
+def anchors_awaiting_confirmation(conn: Connection) -> list[CommitmentAnchor]:
+    """Anchors with an OTS proof that no Bitcoin attestation has confirmed yet."""
+    c = t.commitment_anchors.c
+    rows = conn.execute(
+        select(t.commitment_anchors)
+        .where(c.verified_at.is_(None), c.ots_proof.is_not(None))
+        .order_by(c.anchored_at)
+    ).mappings()
+    return [CommitmentAnchor.model_validate(dict(r)) for r in rows]
+
+
+def _audit_json(rows: Any) -> list[dict[str, Any]]:
+    return [json.loads(json.dumps(dict(r), default=str)) for r in rows]
+
+
+def reset_run(
+    conn: Connection, run_id: UUID, *, actor: str, reason: str, now: datetime
+) -> dict[str, int]:
+    """Operator reset of a run that never committed: keep what was cleared, then start over.
+
+    Refused (``ResetRefusedError``) once the run has a commitment, an anchor, an order or a halt
+    event: those are audit evidence and are never cleared. Verdicts, decisions and the snapshot
+    move into the append-only ``run_resets`` row; DLQ rows and the accumulated cost stay.
+    """
+    r = t.runs.c
+    row = (
+        conn.execute(select(t.runs).where(r.run_id == run_id).with_for_update()).mappings().first()
+    )
+    if row is None:
+        raise ResetRefusedError(f"run {run_id} does not exist")
+    for label, table in (
+        ("a commitment", t.decision_commitments),
+        ("an anchor", t.commitment_anchors),
+        ("orders", t.orders),
+        ("a kill-switch event", t.kill_switch_events),
+    ):
+        if conn.execute(select(literal(1)).where(table.c.run_id == run_id).limit(1)).first():
+            raise ResetRefusedError(f"run {run_id} has {label}; a committed run is immutable")
+    cleared = {
+        table.name: _audit_json(
+            conn.execute(select(table).where(table.c.run_id == run_id)).mappings()
+        )
+        for table in (t.agent_verdicts, t.committee_decisions, t.portfolio_snapshots)
+    }
+    conn.execute(
+        insert(t.run_resets).values(
+            run_id=run_id,
+            reset_at=now,
+            actor=actor,
+            reason=reason,
+            prior_status=row["status"],
+            cleared=cleared,
+        )
+    )
+    for table in (t.agent_verdicts, t.committee_decisions, t.portfolio_snapshots):
+        conn.execute(delete(table).where(table.c.run_id == run_id))
+    conn.execute(
+        update(t.runs)
+        .where(r.run_id == run_id)
+        .values(status=RunStatus.PENDING.value, status_reason=None, ended_at=None)
+    )
+    return {k: len(v) for k, v in cleared.items()}
+
+
+def load_open_executions(conn: Connection, run_id: UUID) -> list[ExecutionRecord]:
+    """Stored orders of a run that are not yet known to be terminal at the broker."""
+    o = t.orders.c
+    terminal = [s.value for s in TERMINAL_ORDER_STATUSES]
+    rows = conn.execute(
+        select(t.orders)
+        .where(o.run_id == run_id, o.status.not_in(terminal))
+        .order_by(o.submitted_at)
+    ).mappings()
+    return [
+        ExecutionRecord.model_validate({k: r[k] for k in ExecutionRecord.model_fields if k in r})
+        for r in rows
+    ]
+
+
+def run_ids_with_open_orders(conn: Connection) -> list[UUID]:
+    """Live runs whose stored orders still look working: candidates for broker reconciliation."""
+    o = t.orders.c
+    terminal = [s.value for s in TERMINAL_ORDER_STATUSES]
+    rows = conn.execute(
+        select(o.run_id).where(o.status.not_in(terminal)).distinct().order_by(o.run_id)
+    )
+    return [r[0] for r in rows]
+
+
+# --- execution evidence (P5 step 4) -----------------------------------------------------------
+
+_EXECUTION_MUTABLE = (
+    "filled_qty", "status", "fill_price", "slippage_bps", "filled_at", "submitted_at",
+)  # fmt: skip
+
+
+def upsert_execution_records(conn: Connection, records: Sequence[ExecutionRecord]) -> None:
+    """One ``orders`` row per broker order. Broker-reported state moves forward on replay; the
+    reference price and source recorded at first sight are never overwritten."""
+    for r in records:
+        row = {
+            "run_id": r.run_id,
+            "broker_order_id": r.broker_order_id,
+            "security_id": r.security_id,
+            "side": r.side.value,
+            "qty": r.qty,
+            "limit_price": r.limit_price,
+            "status": r.status.value,
+            "submitted_at": r.submitted_at,
+            "client_order_id": r.client_order_id,
+            "kind": r.kind.value,
+            "filled_qty": r.filled_qty,
+            "decision_price": r.decision_price,
+            "reference_price": r.reference_price,
+            "reference_source": r.reference_source.value,
+            "fill_price": r.fill_price,
+            "slippage_bps": r.slippage_bps,
+            "filled_at": r.filled_at,
+        }
+        stmt = insert(t.orders).values(row)
+        conn.execute(
+            stmt.on_conflict_do_update(
+                index_elements=[t.orders.c.broker_order_id],
+                set_={c: getattr(stmt.excluded, c) for c in _EXECUTION_MUTABLE},
+            )
+        )
+
+
+def load_execution_record(conn: Connection, client_order_id: str) -> ExecutionRecord | None:
+    o = t.orders.c
+    query = select(t.orders).where(o.client_order_id == client_order_id)
+    row = conn.execute(query).mappings().one_or_none()
+    if row is None:
+        return None
+    return ExecutionRecord.model_validate(
+        {k: row[k] for k in ExecutionRecord.model_fields if k in row}
+    )
