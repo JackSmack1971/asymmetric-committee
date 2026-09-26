@@ -12,12 +12,15 @@ from contracts.enums import (
     VOTING_AGENTS,
     AgentName,
     BearSeverity,
+    BrokerOrderStatus,
     CioAction,
     DataSufficiency,
     FeedName,
     Horizon,
     KillTrigger,
+    OrderKind,
     OrderSide,
+    ReferenceSource,
     RunMode,
     RunStatus,
     SizingMode,
@@ -228,6 +231,53 @@ fill_report = st.builds(
     filled_at=aware_dt,
 )
 
+broker_order = st.builds(
+    m.BrokerOrder,
+    broker_order_id=labels,
+    client_order_id=labels,
+    symbol=labels,
+    side=st.sampled_from(OrderSide),
+    kind=st.sampled_from(OrderKind),
+    qty=positive,
+    filled_qty=nonneg,
+    limit_price=st.none() | positive,
+    filled_avg_price=st.none() | positive,
+    status=st.sampled_from(BrokerOrderStatus),
+    submitted_at=aware_dt,
+    filled_at=st.none() | aware_dt,
+)
+
+execution_record = st.builds(
+    m.ExecutionRecord,
+    run_id=uuids,
+    security_id=security_id,
+    client_order_id=labels,
+    broker_order_id=labels,
+    kind=st.sampled_from(OrderKind),
+    side=st.sampled_from(OrderSide),
+    qty=positive,
+    filled_qty=nonneg,
+    limit_price=st.none() | positive,
+    decision_price=positive,
+    reference_price=positive,
+    reference_source=st.sampled_from(ReferenceSource),
+    fill_price=st.none() | positive,
+    slippage_bps=st.none() | floats(),
+    status=st.sampled_from(BrokerOrderStatus),
+    submitted_at=aware_dt,
+    filled_at=st.none() | aware_dt,
+)
+
+
+@st.composite
+def market_session(draw: st.DrawFn) -> m.MarketSession:
+    opens = draw(aware_dt)
+    return m.MarketSession(
+        session_date=draw(dates),
+        opens_at=opens,
+        closes_at=opens + draw(st.timedeltas(timedelta(minutes=1), timedelta(hours=12))),
+    )
+
 
 @st.composite
 def run_record(draw: st.DrawFn) -> m.RunRecord:
@@ -284,10 +334,10 @@ verdict_record = st.builds(
     m.VerdictRecord,
     security_id=security_id,
     verdict=agent_verdict | red_team_verdict,
-    tokens_in=st.integers(0, 10**6),
-    tokens_out=st.integers(0, 10**6),
+    tokens_in=st.none() | st.integers(0, 10**6),
+    tokens_out=st.none() | st.integers(0, 10**6),
     cost_usd=nonneg,
-    latency_ms=st.integers(0, 10**7),
+    latency_ms=st.none() | st.integers(0, 10**7),
 )
 committee_decision_record = st.builds(
     m.CommitteeDecisionRecord,
@@ -405,6 +455,9 @@ STRATEGIES: dict[type[m.Contract], st.SearchStrategy[Any]] = {
     m.ProposedBook: proposed_book,
     m.OrderIntent: order_intent,
     m.FillReport: fill_report,
+    m.BrokerOrder: broker_order,
+    m.ExecutionRecord: execution_record,
+    m.MarketSession: market_session(),
     m.RunRecord: run_record(),
     m.TaskKey: task_key,
     m.DecisionCommitment: decision_commitment,

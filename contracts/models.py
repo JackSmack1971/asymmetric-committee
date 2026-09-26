@@ -17,12 +17,15 @@ from contracts.enums import (
     VOTING_AGENTS,
     AgentName,
     BearSeverity,
+    BrokerOrderStatus,
     CioAction,
     DataSufficiency,
     FeedName,
     Horizon,
     KillTrigger,
+    OrderKind,
     OrderSide,
+    ReferenceSource,
     RunMode,
     RunStatus,
     SizingMode,
@@ -411,6 +414,63 @@ class FillReport(Contract):
     filled_at: AwareDatetime
 
 
+class BrokerOrder(Contract):
+    """The broker's authoritative view of one order (§9). Never synthesised locally."""
+
+    broker_order_id: Label
+    client_order_id: Label
+    symbol: Label
+    side: OrderSide
+    kind: OrderKind
+    qty: Positive
+    filled_qty: NonNegative
+    limit_price: Positive | None = None
+    filled_avg_price: Positive | None = None
+    status: BrokerOrderStatus
+    submitted_at: AwareDatetime
+    filled_at: AwareDatetime | None = None
+
+
+class MarketSession(Contract):
+    """One exchange trading session from the broker's official calendar (§9 scheduling)."""
+
+    session_date: date
+    opens_at: AwareDatetime
+    closes_at: AwareDatetime
+
+    @model_validator(mode="after")
+    def _ordered(self) -> Self:
+        if self.closes_at <= self.opens_at:
+            raise ValueError("a session closes after it opens")
+        return self
+
+
+class ExecutionRecord(Contract):
+    """Persisted execution evidence for one order (§4.3 orders, §9 logging).
+
+    ``fill_price`` and ``slippage_bps`` are the broker's fill against the recorded reference; they
+    are None until something fills. Paper slippage is not evidence of real costs (§9).
+    """
+
+    run_id: UUID
+    security_id: SecurityId
+    client_order_id: Label
+    broker_order_id: Label
+    kind: OrderKind
+    side: OrderSide
+    qty: Positive
+    filled_qty: NonNegative
+    limit_price: Positive | None = None
+    decision_price: Positive
+    reference_price: Positive
+    reference_source: ReferenceSource
+    fill_price: Positive | None = None
+    slippage_bps: Finite | None = None
+    status: BrokerOrderStatus
+    submitted_at: AwareDatetime
+    filled_at: AwareDatetime | None = None
+
+
 class RunRecord(Contract):
     run_id: UUID
     mode: RunMode
@@ -485,10 +545,10 @@ class VerdictRecord(Contract):
 
     security_id: SecurityId
     verdict: AgentVerdict | RedTeamVerdict
-    tokens_in: int = Field(ge=0)
-    tokens_out: int = Field(ge=0)
+    tokens_in: int | None = Field(ge=0)  # None = not reported / no call was made, never zero
+    tokens_out: int | None = Field(ge=0)
     cost_usd: NonNegative
-    latency_ms: int = Field(ge=0)
+    latency_ms: int | None = Field(ge=0)
 
 
 class CommitteeDecisionRecord(Contract):

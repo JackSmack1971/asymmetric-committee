@@ -53,6 +53,7 @@ class RunStatus(StrEnum):
     GATED = "GATED"
     AGENTS_OK = "AGENTS_OK"
     COMMITTED = "COMMITTED"
+    ANCHORED = "ANCHORED"
     EXECUTED = "EXECUTED"
     SCORED = "SCORED"
     FAILED = "FAILED"
@@ -66,6 +67,7 @@ _RUN_PATH = (
     RunStatus.GATED,
     RunStatus.AGENTS_OK,
     RunStatus.COMMITTED,
+    RunStatus.ANCHORED,
     RunStatus.EXECUTED,
     RunStatus.SCORED,
 )
@@ -78,6 +80,10 @@ RUN_TRANSITIONS: Mapping[RunStatus, frozenset[RunStatus]] = {
         cur: frozenset({nxt, RunStatus.FAILED, RunStatus.PARTIAL})
         for cur, nxt in pairwise(_RUN_PATH)
     },
+    # Backtests are never executed: they stop at ANCHORED and may be scored from there (§11).
+    RunStatus.ANCHORED: frozenset(
+        {RunStatus.EXECUTED, RunStatus.SCORED, RunStatus.FAILED, RunStatus.PARTIAL}
+    ),
     **{s: frozenset() for s in TERMINAL_RUN_STATUSES},
 }
 
@@ -144,6 +150,14 @@ class KillTrigger(StrEnum):
     MANUAL = "manual"
 
 
+# ``runs.status_reason`` of a run a kill-switch halt moved to PARTIAL (§9): terminal, never retried.
+HALT_REASON_PREFIX = "kill_switch:"
+
+
+def halt_reason(trigger: KillTrigger) -> str:
+    return f"{HALT_REASON_PREFIX}{trigger.value}"
+
+
 class Horizon(IntEnum):
     """Scoring horizon in trading days (§3.1, §18.3)."""
 
@@ -166,6 +180,41 @@ class FeedName(StrEnum):
 class OrderSide(StrEnum):
     BUY = "buy"
     SELL = "sell"
+
+
+class OrderKind(StrEnum):
+    """Order type used by the §9 limit -> cancel -> market sequence."""
+
+    LIMIT = "limit"
+    MARKET = "market"
+
+
+class BrokerOrderStatus(StrEnum):
+    """Broker order state, collapsed to what execution decisions need (§9).
+
+    Anything not known to be final maps to OPEN or PENDING_CANCEL, so an unrecognised broker
+    status is never mistaken for a confirmed cancel.
+    """
+
+    OPEN = "open"
+    PARTIALLY_FILLED = "partially_filled"
+    PENDING_CANCEL = "pending_cancel"
+    FILLED = "filled"
+    CANCELED = "canceled"
+    EXPIRED = "expired"
+    DONE_FOR_DAY = "done_for_day"
+    REJECTED = "rejected"
+
+    @property
+    def terminal(self) -> bool:
+        return self in TERMINAL_ORDER_STATUSES
+
+
+class ReferenceSource(StrEnum):
+    """Where an execution reference price came from (§9)."""
+
+    IEX_MID = "iex_mid"
+    SIP_LAST = "sip_last"
 
 
 class ModelTier(StrEnum):
@@ -246,3 +295,14 @@ class AliasKind(StrEnum):
     CIK = "cik"
     BRAND = "brand"
     PERSON = "person"  # a named insider or executive (Form 4 filer)
+
+
+TERMINAL_ORDER_STATUSES = frozenset(
+    {
+        BrokerOrderStatus.FILLED,
+        BrokerOrderStatus.CANCELED,
+        BrokerOrderStatus.EXPIRED,
+        BrokerOrderStatus.DONE_FOR_DAY,
+        BrokerOrderStatus.REJECTED,
+    }
+)
