@@ -1,6 +1,9 @@
 # LLM model tiers (§10.1). The evaluator reads stated_training_cutoff to pick valid backtest
 # windows (§12.1): valid window starts after the latest cutoff + 60 days.
 #
+# family: provider family (monoculture measurement, §7.3). measured_effective_cutoff: null until a
+# probe-flagged quarter exists (§12.1). accepts_temperature / optional reasoning_effort (low|medium|high)
+# gate the request params (§10.2).
 # rpm/tpm: provider limits per slug (positive ints; Redis token bucket, §10.2). Prices: USD per
 # 1M tokens (>= 0). Cost policy: local tokens x prices is authoritative (§10.2 Budget).
 #
@@ -10,16 +13,22 @@ tiers:
   fast:        # Value, Quality+Catalyst, Insider, Technical, Macro
     primary:
       slug: "TODO/fast-model"
+      family: "TODO"   # TODO(owner): provider family of this slug
       stated_training_cutoff: 2000-01-01   # TODO
+      measured_effective_cutoff: null   # only from probe results (§12.1)
       supports_structured_outputs: true
+      accepts_temperature: true   # TODO(owner): false for reasoning models
       rpm: 60                # TODO
       tpm: 200000            # TODO
       input_price_usd_per_mtok: 1.0    # TODO
       output_price_usd_per_mtok: 3.0   # TODO
     fallbacks:
       - slug: "TODO/fast-fallback"
+        family: "TODO"   # TODO(owner): provider family of this slug
         stated_training_cutoff: 2000-01-01   # TODO
+        measured_effective_cutoff: null   # only from probe results (§12.1)
         supports_structured_outputs: true
+        accepts_temperature: true   # TODO(owner): false for reasoning models
         rpm: 60                # TODO
         tpm: 200000            # TODO
         input_price_usd_per_mtok: 1.0    # TODO
@@ -27,16 +36,22 @@ tiers:
   strong:      # Red team, CIO
     primary:
       slug: "TODO/strong-model"
+      family: "TODO"   # TODO(owner): provider family of this slug
       stated_training_cutoff: 2000-01-01   # TODO
+      measured_effective_cutoff: null   # only from probe results (§12.1)
       supports_structured_outputs: true
+      accepts_temperature: true   # TODO(owner): false for reasoning models
       rpm: 60                # TODO
       tpm: 200000            # TODO
       input_price_usd_per_mtok: 1.0    # TODO
       output_price_usd_per_mtok: 3.0   # TODO
     fallbacks:
       - slug: "TODO/strong-fallback"
+        family: "TODO"   # TODO(owner): provider family of this slug
         stated_training_cutoff: 2000-01-01   # TODO
+        measured_effective_cutoff: null   # only from probe results (§12.1)
         supports_structured_outputs: true
+        accepts_temperature: true   # TODO(owner): false for reasoning models
         rpm: 60                # TODO
         tpm: 200000            # TODO
         input_price_usd_per_mtok: 1.0    # TODO
@@ -44,8 +59,11 @@ tiers:
   probe:       # Memorization probes (§12.1): must be a production model
     primary:
       slug: "TODO/fast-model"
+      family: "TODO"   # TODO(owner): provider family of this slug
       stated_training_cutoff: 2000-01-01   # TODO
+      measured_effective_cutoff: null   # only from probe results (§12.1)
       supports_structured_outputs: true
+      accepts_temperature: true   # TODO(owner): false for reasoning models
       rpm: 60                # TODO
       tpm: 200000            # TODO
       input_price_usd_per_mtok: 1.0    # TODO

@@ -18,7 +18,7 @@ from config.loader import (
     UsageUnavailableError,
     load_config,
 )
-from contracts.enums import BearSeverity, Horizon, ModelTier
+from contracts.enums import BearSeverity, Horizon, ModelTier, ReasoningEffort
 from contracts.models import MAX_POSITION
 
 
@@ -101,6 +101,9 @@ def test_response_model_lookup_handles_primary_and_fallback_independently(cfg_di
                 "tpm": 100_000,
                 "input_price_usd_per_mtok": 0.5,
                 "output_price_usd_per_mtok": 1.5,
+                "family": "provider",
+                "measured_effective_cutoff": None,
+                "accepts_temperature": True,
             }
         ],
     )
@@ -401,3 +404,82 @@ def test_overlapping_sic_ranges_rejected(cfg_dir: Path) -> None:
     path.write_text(yaml.safe_dump(data))
     with pytest.raises(ConfigError, match="overlapping"):
         load_config(cfg_dir, allow_placeholders=True, env={})
+
+
+NEW_MODEL_FIELDS = ["family", "measured_effective_cutoff", "accepts_temperature"]
+
+
+@pytest.mark.parametrize("field", NEW_MODEL_FIELDS)
+@pytest.mark.parametrize("where", [["primary"], ["fallbacks", 0]])
+def test_model_missing_required_field_rejected(
+    cfg_dir: Path, field: str, where: list[str | int]
+) -> None:
+    file = cfg_dir / "models.yaml"
+    data = yaml.safe_load(file.read_text())
+    node = data["tiers"]["strong"]
+    for key in where:
+        node = node[key]
+    del node[field]
+    file.write_text(yaml.safe_dump(data))
+    with pytest.raises(ConfigError, match=field):
+        load_config(cfg_dir, allow_placeholders=True, env={})
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "match"),
+    [
+        (["tiers", "fast", "primary", "family"], "", "family"),
+        (["tiers", "fast", "primary", "reasoning_effort"], "extreme", "reasoning_effort"),
+        (["tiers", "fast", "primary", "accepts_temperature"], "maybe", "accepts_temperature"),
+        (["tiers", "fast", "primary", "measured_effective_cutoff"], "soon", "measured"),
+    ],
+)
+def test_invalid_model_metadata_rejected(
+    cfg_dir: Path, path: list[str], value: object, match: str
+) -> None:
+    edit(cfg_dir, "models", path, value)
+    with pytest.raises(ConfigError, match=match):
+        load_config(cfg_dir, allow_placeholders=True, env={})
+
+
+def test_reasoning_effort_is_optional_and_typed(cfg_dir: Path) -> None:
+    assert (
+        load_config(cfg_dir, allow_placeholders=True, env={})
+        .models.tiers[ModelTier.FAST]
+        .primary.reasoning_effort
+        is None
+    )
+    for tier in ("fast", "probe"):  # probe reuses the fast primary; metadata must match
+        edit(cfg_dir, "models", ["tiers", tier, "primary", "reasoning_effort"], "high")
+    fast = load_config(cfg_dir, allow_placeholders=True, env={}).models.tiers[ModelTier.FAST]
+    assert fast.primary.reasoning_effort is ReasoningEffort.HIGH
+
+
+def test_effective_cutoff_is_later_of_stated_and_measured(cfg_dir: Path) -> None:
+    def edit_fast(field: str, value: object) -> None:
+        for tier in ("fast", "probe"):  # probe reuses the fast primary; metadata must match
+            edit(cfg_dir, "models", ["tiers", tier, "primary", field], value)
+
+    edit_fast("stated_training_cutoff", "2024-01-01")
+
+    def primary() -> ServedModel:
+        return (
+            load_config(cfg_dir, allow_placeholders=True, env={})
+            .models.tiers[ModelTier.FAST]
+            .primary
+        )
+
+    assert primary().effective_cutoff == date(2024, 1, 1)  # measured null -> stated
+    edit_fast("measured_effective_cutoff", "2024-09-30")
+    assert primary().effective_cutoff == date(2024, 9, 30)  # measured later wins
+    edit_fast("measured_effective_cutoff", "2023-06-01")
+    assert primary().effective_cutoff == date(2024, 1, 1)  # measured earlier -> stated
+
+
+def test_latest_effective_cutoff_spans_all_primaries_and_fallbacks(cfg_dir: Path) -> None:
+    edit(
+        cfg_dir, "models", ["tiers", "strong", "primary", "measured_effective_cutoff"], "2027-02-01"
+    )
+    cfg = load_config(cfg_dir, allow_placeholders=True, env={})
+    assert cfg.models.latest_effective_cutoff() == date(2027, 2, 1)
+    assert cfg.models.latest_effective_cutoff() >= cfg.models.latest_stated_cutoff()

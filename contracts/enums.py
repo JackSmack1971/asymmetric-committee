@@ -160,6 +160,14 @@ class ModelTier(StrEnum):
     PROBE = "probe"
 
 
+class ReasoningEffort(StrEnum):
+    """OpenRouter ``reasoning.effort`` levels a model entry may set (§10.1)."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
 class PriceFeed(StrEnum):
     """Alpaca bar feed (§4.1). IEX is the free live feed; SIP is used for history > 15 min old."""
 

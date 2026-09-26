@@ -13,7 +13,7 @@ from typing import Annotated, Any, Self, TypeGuard
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from contracts.enums import BearSeverity, FeedName, Horizon, ModelTier
+from contracts.enums import BearSeverity, FeedName, Horizon, ModelTier, ReasoningEffort
 from contracts.models import MAX_POSITION
 
 CONFIG_DIR = Path(__file__).parent
@@ -53,12 +53,23 @@ class CallCost(_Cfg):
 
 class ServedModel(_Cfg):
     slug: str = Field(min_length=1)
+    family: str = Field(min_length=1)  # e.g. anthropic, openai, meta; monoculture check (§7.3)
     stated_training_cutoff: date
+    measured_effective_cutoff: date | None  # written only from probe results (§12.1)
     supports_structured_outputs: bool
+    accepts_temperature: bool  # send ``temperature`` only when true (§10.2)
+    reasoning_effort: ReasoningEffort | None = None  # send ``reasoning`` only when set
     rpm: int = Field(gt=0)  # requests per minute (token bucket, §10.2)
     tpm: int = Field(gt=0)  # tokens per minute (token bucket, §10.2)
     input_price_usd_per_mtok: NonNegFloat
     output_price_usd_per_mtok: NonNegFloat
+
+    @property
+    def effective_cutoff(self) -> date:
+        """Later of the vendor-stated and probe-measured cutoffs (§10.1)."""
+        if self.measured_effective_cutoff is None:
+            return self.stated_training_cutoff
+        return max(self.stated_training_cutoff, self.measured_effective_cutoff)
 
     def local_cost_usd(self, prompt_tokens: int, completion_tokens: int) -> float:
         if prompt_tokens < 0 or completion_tokens < 0:
@@ -147,6 +158,12 @@ class ModelsConfig(_Cfg):
     def latest_stated_cutoff(self) -> date:
         return max(
             model.stated_training_cutoff for entry in self.tiers.values() for model in entry.models
+        )
+
+    def latest_effective_cutoff(self) -> date:
+        """Latest effective cutoff over every primary and fallback (§12.1 item 1)."""
+        return max(
+            model.effective_cutoff for entry in self.tiers.values() for model in entry.models
         )
 
     def model_for_response(self, response_model: str) -> ServedModel:
