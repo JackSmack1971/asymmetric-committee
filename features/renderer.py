@@ -71,6 +71,9 @@ _FUNDAMENTAL_RATIOS = (
     "accruals_ratio",
 )
 
+PRICE_FEATURES: tuple[str, ...] = _PRICE_RATIOS
+FUNDAMENTAL_FEATURES: tuple[str, ...] = _FUNDAMENTAL_RATIOS
+
 FEATURE_KINDS: dict[str, Kind] = {
     **dict.fromkeys(_PRICE_RATIOS, Kind.RATIO),
     **dict.fromkeys(_FUNDAMENTAL_RATIOS, Kind.RATIO),
