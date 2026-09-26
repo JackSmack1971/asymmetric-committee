@@ -238,6 +238,7 @@ def call(part: Partition, c: OpenRouterClient, **kw: object) -> AgentCallResult:
         system_prompt="rubric",
         prompt_version="v1",
         requested_model=ENTRY.primary.slug,
+        config_hash="c" * 64,
     )
     return run_agent_call(c, **{**args, **kw})  # type: ignore[arg-type]
 
@@ -275,18 +276,19 @@ def test_cache_hit_recomputes_valid_for_this_runs_clock(part: Partition) -> None
 
 @respx.mock
 def test_cache_key_varies_with_each_component(part: Partition) -> None:
-    base = cache_key(AgentName.VALUE, "v1", "m", "h")
+    base = cache_key(AgentName.VALUE, "v1", "m", "c", "h")
     assert (
         len(
             {
                 base,
-                cache_key(AgentName.INSIDER, "v1", "m", "h"),
-                cache_key(AgentName.VALUE, "v2", "m", "h"),
-                cache_key(AgentName.VALUE, "v1", "m2", "h"),
-                cache_key(AgentName.VALUE, "v1", "m", "h2"),
+                cache_key(AgentName.INSIDER, "v1", "m", "c", "h"),
+                cache_key(AgentName.VALUE, "v2", "m", "c", "h"),
+                cache_key(AgentName.VALUE, "v1", "m2", "c", "h"),
+                cache_key(AgentName.VALUE, "v1", "m", "c", "h2"),
+                cache_key(AgentName.VALUE, "v1", "m", "c2", "h"),
             }
         )
-        == 5
+        == 6
     )
 
 
@@ -302,14 +304,14 @@ def test_bad_verdicts_are_not_cached(part: Partition) -> None:
 def test_corrupt_cache_entry_is_a_miss(part: Partition) -> None:
     route = respx.post(URL).respond(200, json=ok_body(_value_json(part)))
     cache = DictCache()
-    key = cache_key(AgentName.VALUE, "v1", ENTRY.primary.slug, part.input_hash)
+    key = cache_key(AgentName.VALUE, "v1", ENTRY.primary.slug, "c" * 64, part.input_hash)
     cache.data[key] = "{garbage"
     assert call(part, client(), cache=cache).verdict is not None
     assert route.call_count == 1
 
 
 def test_cache_requires_requested_model(part: Partition) -> None:
-    with pytest.raises(ValueError, match="requested_model"):
+    with pytest.raises(ValueError, match="config_hash"):
         call(part, client(), cache=DictCache(), requested_model="")
 
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -41,6 +42,42 @@ class UnknownServedModelError(RuntimeError):
 
 class LLMTransientError(RuntimeError):
     """A call still failing after its retries (429, 5xx, network). Goes to the dead-letter queue."""
+
+
+class BudgetExceededError(RuntimeError):
+    """Cumulative run cost reached ``run_budget_usd``: abort the run's remaining calls (§10.2).
+
+    The caller marks the run ``PARTIAL``; every candidate not yet called goes to the dead-letter
+    queue with reason ``budget_exceeded``.
+    """
+
+
+class RunBudget:
+    """Thread-safe cumulative cost counter with a hard ceiling."""
+
+    def __init__(self, max_usd: float) -> None:
+        if max_usd <= 0:
+            raise ValueError("max_usd must be positive")
+        self.max_usd = max_usd
+        self._spent = 0.0
+        self._lock = threading.Lock()
+
+    @property
+    def spent_usd(self) -> float:
+        with self._lock:
+            return self._spent
+
+    @property
+    def exceeded(self) -> bool:
+        return self.spent_usd >= self.max_usd
+
+    def charge(self, usd: float) -> None:
+        """Book a call's cost, then raise if the ceiling is reached (spend stays recorded)."""
+        with self._lock:
+            self._spent += usd
+            over = self._spent >= self.max_usd
+        if over:
+            raise BudgetExceededError(f"run cost {self.spent_usd:.4f} >= budget {self.max_usd}")
 
 
 class VerdictCache(Protocol):
@@ -119,9 +156,18 @@ def _repair_prompt(problem: str) -> str:
     )
 
 
-def cache_key(agent: AgentName, prompt_version: str, requested_model: str, input_hash: str) -> str:
-    """Pre-request key (§10.2). It uses the *requested* model: ``model_served`` is not known yet."""
-    parts = (agent.value, prompt_version, requested_model, input_hash)
+def cache_key(
+    agent: AgentName,
+    prompt_version: str,
+    requested_model: str,
+    config_hash: str,
+    input_hash: str,
+) -> str:
+    """Pre-request key (§10.2). It uses the *requested* model: ``model_served`` is not known yet.
+
+    ``config_hash`` keeps a changed model config (tiers, params, schema) from serving stale output.
+    """
+    parts = (agent.value, prompt_version, requested_model, config_hash, input_hash)
     return "llm_eval:" + hashlib.sha256("".join(parts).encode()).hexdigest()
 
 
@@ -175,8 +221,10 @@ def run_agent_call(
     system_prompt: str,
     prompt_version: str,
     requested_model: str = "",
+    config_hash: str = "",
     cache: VerdictCache | None = None,
     dlq: DeadLetterQueue | None = None,
+    budget: RunBudget | None = None,
 ) -> AgentCallResult:
     """One call plus at most one repair attempt (§10.2 Validation).
 
@@ -187,15 +235,18 @@ def run_agent_call(
     Pydantic parse, then the evidence check. A second failure discards the call. Cost accrues on
     every call, repaired or not. ``UsageUnavailableError``/``UnknownServedModelError`` propagate so
     the caller can abort the run as ``PARTIAL`` instead of booking $0.
+
+    With a ``budget``, every call's cost is booked; once the ceiling is reached the job is pushed
+    to ``dlq`` and ``BudgetExceededError`` propagates (a call already over budget is never sent).
     """
     if partition.agent is not agent:
         raise ValueError(f"partition is for {partition.agent.value}, not {agent.value}")
     out_model = RedTeamVerdictLLM if agent is AgentName.RED_TEAM else AgentVerdictLLM
     key = None
     if cache is not None:
-        if not requested_model:
-            raise ValueError("requested_model is required with a cache")
-        key = cache_key(agent, prompt_version, requested_model, partition.input_hash)
+        if not requested_model or not config_hash:
+            raise ValueError("requested_model and config_hash are required with a cache")
+        key = cache_key(agent, prompt_version, requested_model, config_hash, partition.input_hash)
         if (cached := cache.get(key)) is not None and (
             hit := _from_cache(
                 cached,
@@ -214,23 +265,37 @@ def run_agent_call(
     ]
     cost = 0.0
     reason = DiscardReason.UNPARSEABLE
+
+    def dead_letter(error: str) -> None:
+        if dlq is not None:
+            dlq.push(
+                {
+                    "run_id": str(run_id),
+                    "agent": agent.value,
+                    "entity_token": partition.entity_token,
+                    "prompt_version": prompt_version,
+                    "error": error,
+                }
+            )
+
     for attempt in range(2):
+        if budget is not None and budget.exceeded:
+            dead_letter("budget_exceeded")
+            raise BudgetExceededError("run budget already exhausted")
         try:
             response = client.complete(messages)
         except LLMTransientError as e:
-            if dlq is not None:
-                dlq.push(
-                    {
-                        "run_id": str(run_id),
-                        "agent": agent.value,
-                        "entity_token": partition.entity_token,
-                        "prompt_version": prompt_version,
-                        "error": str(e),
-                    }
-                )
+            dead_letter(str(e))
             return AgentCallResult(None, cost, attempt, DiscardReason.DEAD_LETTERED)
         served = _served_model(models, response.model)
-        cost += served.call_cost(response.usage).usd
+        call_usd = served.call_cost(response.usage).usd
+        cost += call_usd
+        if budget is not None:
+            try:
+                budget.charge(call_usd)
+            except BudgetExceededError:
+                dead_letter("budget_exceeded")
+                raise
         parsed = _parse(out_model, response.content)
         if isinstance(parsed, str):
             problem, reason = parsed, DiscardReason.UNPARSEABLE

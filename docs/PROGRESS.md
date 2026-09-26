@@ -73,3 +73,9 @@ Read at the start of every session; update at the end. Spec: `docs/asymmetric-co
 4. **Short side:** phase 2 only, after long-only results exist.
 5. **Model slugs + cutoffs** in `config/models.yaml` are placeholders (owner to fill). Production startup fails until filled.
 6. **SPEC-GAP §8.1/§7:** no defaults for sizing `k`, dispersion `λ`, or pooling `w_floor`. Placeholders are in `risk.yaml`/`pipeline.yaml`, to be settled before P4. Is σ_20d daily or annualized?
+
+## P3 step 6 (2026-09-25)
+
+- Cache key is now `sha256(agent, prompt_version, requested primary slug, config_hash, partition hash)` with a unit separator between parts (`agents/base.py::cache_key`, not `store.py`, where the function already lives). `config_hash` is a required argument of `run_agent_call` when a cache is passed; the caller (P5) must supply the run's config hash. This supersedes the "known gaps" note in the step 5 cache entry.
+- `RunBudget` (thread-safe counter) and `BudgetExceededError` in `agents/base.py`. The limit is the existing `pipeline.yaml` `budgets.run_budget_usd` (there is no `settings.yaml`). Cost is booked, then `>=` the limit raises. A call made after that is never sent. The job goes to the DLQ with `error: budget_exceeded`. Owner directive named `PARTIAL_BUDGET_EXCEEDED`, but `RunStatus` has only `PARTIAL` (state machine and schema tests), so the caller marks `PARTIAL`; a new status is a contract change and is not made here. `DiscardReason.UNPROVIDED_EVIDENCE` was kept (directive called it `INVALID_CITATIONS`).
+- `tests/agents/test_p3_e2e.py`: 5 cases over mocked OpenRouter (respx). Redis-backed tests remain skipped locally. `make gate-P3` is still a stub and P3 is not marked done.
