@@ -1,12 +1,13 @@
 """Turns one partition into one stored verdict (§3.1, §10.2).
 
 This is the only module that builds an ``AgentVerdict``/``RedTeamVerdict`` from LLM output and the
-only place ``valid`` is computed. Transport (OpenRouter HTTP, cache, rate limiting) sits behind the
-``ChatClient`` protocol and lands in later P3 steps, so everything here is testable with a fake.
+only place ``valid`` is computed. Transport (OpenRouter HTTP, rate limiting) sits behind the
+``ChatClient`` protocol in ``agents/llm/``; the cache and dead-letter queue are protocols here.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -38,6 +39,20 @@ class UnknownServedModelError(RuntimeError):
     """``response.model`` is not in ``config/models.yaml``: cost and cutoff are unknowable."""
 
 
+class LLMTransientError(RuntimeError):
+    """A call still failing after its retries (429, 5xx, network). Goes to the dead-letter queue."""
+
+
+class VerdictCache(Protocol):
+    def get(self, key: str) -> str | None: ...
+
+    def set(self, key: str, value: str) -> None: ...
+
+
+class DeadLetterQueue(Protocol):
+    def push(self, record: dict[str, str]) -> None: ...
+
+
 @dataclass(frozen=True)
 class ChatResponse:
     model: str  # response.model: the model that actually answered (invariant 7)
@@ -52,6 +67,7 @@ class ChatClient(Protocol):
 class DiscardReason(StrEnum):
     UNPARSEABLE = "unparseable"
     UNPROVIDED_EVIDENCE = "unprovided_evidence"
+    DEAD_LETTERED = "dead_lettered"  # transport failed after retries; the run must go PARTIAL
 
 
 @dataclass(frozen=True)
@@ -62,6 +78,7 @@ class AgentCallResult:
     cost_usd: float
     calls: int
     discard_reason: DiscardReason | None = None
+    cache_hit: bool = False
 
 
 def verdict_valid(mode: RunMode, as_of: datetime, served: ServedModel) -> bool:
@@ -102,6 +119,51 @@ def _repair_prompt(problem: str) -> str:
     )
 
 
+def cache_key(agent: AgentName, prompt_version: str, requested_model: str, input_hash: str) -> str:
+    """Pre-request key (§10.2). It uses the *requested* model: ``model_served`` is not known yet."""
+    parts = (agent.value, prompt_version, requested_model, input_hash)
+    return "llm_eval:" + hashlib.sha256("".join(parts).encode()).hexdigest()
+
+
+def _cache_entry(out: AgentVerdictLLM | RedTeamVerdictLLM, served: ServedModel) -> str:
+    return json.dumps({"model_served": served.slug, "output": out.model_dump(mode="json")})
+
+
+def _from_cache(
+    cached: str,
+    *,
+    models: ModelsConfig,
+    mode: RunMode,
+    run_id: UUID,
+    agent: AgentName,
+    partition: Partition,
+    prompt_version: str,
+) -> AgentVerdict | RedTeamVerdict | None:
+    """Rebuild a verdict from a cache entry, or ``None`` (treated as a miss) if it is unusable.
+
+    The key does not contain ``as_of`` (partition text holds only relative days), so the envelope
+    and ``valid`` are recomputed for this run from the stored output and the model that served it.
+    """
+    out_model = RedTeamVerdictLLM if agent is AgentName.RED_TEAM else AgentVerdictLLM
+    try:
+        entry = json.loads(cached)
+        served = models.model_for_response(entry["model_served"])
+        out = out_model.model_validate(entry["output"])
+    except (ValueError, KeyError, TypeError):
+        return None
+    if unprovided_evidence(out.key_evidence, partition):
+        return None
+    return _envelope(
+        out,
+        run_id=run_id,
+        agent=agent,
+        partition=partition,
+        prompt_version=prompt_version,
+        served=served,
+        valid=verdict_valid(mode, partition.as_of, served),
+    )
+
+
 def run_agent_call(
     client: ChatClient,
     *,
@@ -112,8 +174,15 @@ def run_agent_call(
     partition: Partition,
     system_prompt: str,
     prompt_version: str,
+    requested_model: str = "",
+    cache: VerdictCache | None = None,
+    dlq: DeadLetterQueue | None = None,
 ) -> AgentCallResult:
     """One call plus at most one repair attempt (§10.2 Validation).
+
+    With a ``cache``, an identical (agent, prompt_version, requested model, partition) is never
+    re-billed. A call that keeps failing in transit is pushed to ``dlq`` and reported as
+    ``DEAD_LETTERED`` so the caller can mark the run ``PARTIAL``.
 
     Pydantic parse, then the evidence check. A second failure discards the call. Cost accrues on
     every call, repaired or not. ``UsageUnavailableError``/``UnknownServedModelError`` propagate so
@@ -122,6 +191,23 @@ def run_agent_call(
     if partition.agent is not agent:
         raise ValueError(f"partition is for {partition.agent.value}, not {agent.value}")
     out_model = RedTeamVerdictLLM if agent is AgentName.RED_TEAM else AgentVerdictLLM
+    key = None
+    if cache is not None:
+        if not requested_model:
+            raise ValueError("requested_model is required with a cache")
+        key = cache_key(agent, prompt_version, requested_model, partition.input_hash)
+        if (cached := cache.get(key)) is not None and (
+            hit := _from_cache(
+                cached,
+                models=models,
+                mode=mode,
+                run_id=run_id,
+                agent=agent,
+                partition=partition,
+                prompt_version=prompt_version,
+            )
+        ):
+            return AgentCallResult(hit, 0.0, 0, cache_hit=True)
     messages: list[Message] = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": partition.text},
@@ -129,7 +215,20 @@ def run_agent_call(
     cost = 0.0
     reason = DiscardReason.UNPARSEABLE
     for attempt in range(2):
-        response = client.complete(messages)
+        try:
+            response = client.complete(messages)
+        except LLMTransientError as e:
+            if dlq is not None:
+                dlq.push(
+                    {
+                        "run_id": str(run_id),
+                        "agent": agent.value,
+                        "entity_token": partition.entity_token,
+                        "prompt_version": prompt_version,
+                        "error": str(e),
+                    }
+                )
+            return AgentCallResult(None, cost, attempt, DiscardReason.DEAD_LETTERED)
         served = _served_model(models, response.model)
         cost += served.call_cost(response.usage).usd
         parsed = _parse(out_model, response.content)
@@ -138,6 +237,8 @@ def run_agent_call(
         else:
             missing = unprovided_evidence(parsed.key_evidence, partition)
             if not missing:
+                if cache is not None and key is not None:
+                    cache.set(key, _cache_entry(parsed, served))
                 return AgentCallResult(
                     _envelope(
                         parsed,
