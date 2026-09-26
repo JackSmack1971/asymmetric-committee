@@ -36,6 +36,9 @@ def sec(sid: int, name: str, cik: int) -> Security:
         ("Acme Corp", None),  # stripped name is one word: already covered by identity aliases
         ("Zephyr", None),
         ("Al Fresco Holdings Inc", None),  # first word under 3 characters
+        ("Texas Instruments Inc", None),  # stop word: never a standalone alias
+        ("applied Materials Inc", None),  # case-insensitive
+        ("Appliedx Systems Inc", "Appliedx"),  # only whole words are blocked
     ],
 )
 def test_colloquial_short_name(name: str, short: str | None) -> None:
