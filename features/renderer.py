@@ -17,6 +17,7 @@ small count or a flag. Nothing here reads identity, dates or currency:
 from __future__ import annotations
 
 import math
+import re
 import statistics
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
@@ -79,6 +80,56 @@ FEATURE_KINDS: dict[str, Kind] = {
     "news_count_zscore_7d": Kind.RATIO,
     "news_source_diversity_7d": Kind.COUNT,
 }
+
+
+_NUM = r"\d(?:[\d,]*\d)?(?:\.\d+)?"
+_MONTH = (
+    r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?"
+    r"|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b\.?"
+)
+_YEAR = r"(?:19|20)\d{2}"
+_AMOUNT_RE = re.compile(
+    rf"(?:[$\u20ac\u00a3\u00a5]|\b(?:USD|EUR|GBP)\s?){_NUM}"
+    r"(?:\s?(?:thousand|million|billion|trillion|bn|mm|[kmbt])\b)?",
+    re.IGNORECASE,
+)
+_MAGNITUDE_RE = re.compile(
+    rf"{_NUM}\s?(?:thousand|million|billion|trillion)\b(?:\s+(shares|dollars|euros|usd))?",
+    re.IGNORECASE,
+)
+_SHARES_RE = re.compile(rf"{_NUM}\s+shares\b", re.IGNORECASE)
+_DATE_RES = (
+    re.compile(rf"\b{_YEAR}[-/.](?:0?[1-9]|1[0-2])[-/.](?:0?[1-9]|[12]\d|3[01])\b"),
+    re.compile(rf"\b(?:0?[1-9]|1[0-2])[-/.](?:0?[1-9]|[12]\d|3[01])[-/.](?:{_YEAR}|\d{{2}})\b"),
+    re.compile(rf"\b{_MONTH}\s+\d{{1,2}}(?:,?\s+{_YEAR})?\b", re.IGNORECASE),
+    re.compile(rf"\b{_MONTH}\s+{_YEAR}\b", re.IGNORECASE),
+    re.compile(rf"\bQ[1-4]\s?{_YEAR}\b", re.IGNORECASE),
+    re.compile(rf"\b(?:FY|fiscal(?:\s+year)?)\s?(?:{_YEAR}|\d{{2}})\b", re.IGNORECASE),
+    re.compile(rf"(?<!\d){_YEAR}(?!\d)"),
+)
+_LONG_NUMBER_RE = re.compile(rf"(?<![\w.]){_NUM}")
+_MIN_LONG_DIGITS = 4
+
+
+def _magnitude(match: re.Match[str]) -> str:
+    unit = (match.group(1) or "").lower()
+    return "[SHARES]" if unit == "shares" else "[AMOUNT]" if unit else "[NUM]"
+
+
+def _long_number(match: re.Match[str]) -> str:
+    digits = sum(c.isdigit() for c in match.group())
+    return "[NUM]" if digits >= _MIN_LONG_DIGITS else match.group()
+
+
+def scrub_text(text: str) -> str:
+    """N1/N4 for free text (news): currency amounts, share counts, calendar dates and any other
+    number of four or more digits become neutral placeholders. Percentages and small counts stay."""
+    text = _AMOUNT_RE.sub("[AMOUNT]", text)
+    text = _MAGNITUDE_RE.sub(_magnitude, text)
+    text = _SHARES_RE.sub("[SHARES]", text)
+    for pattern in _DATE_RES:
+        text = pattern.sub("[DATE]", text)
+    return _LONG_NUMBER_RE.sub(_long_number, text)
 
 
 def sig2(value: float) -> str:
@@ -191,8 +242,12 @@ def render_features(
     universe: Sequence[FeatureRow],
     sectors: Mapping[int, str],
     names: Sequence[str],
+    evidence_prefix: str | None = None,
 ) -> str:
-    """One security's features as TSV. ``universe`` is the point-in-time included snapshot."""
+    """One security's features as TSV. ``universe`` is the point-in-time included snapshot.
+
+    With ``evidence_prefix`` every row leads with an ``evidence_id`` (``TECH_1``, ``TECH_2`` ...)
+    that the agent may cite and the validator checks (§3.1, §10.2)."""
     for name in names:
         if name not in FEATURE_KINDS:
             raise RenderError(f"feature {name!r} may not be rendered (rule set N)")
@@ -216,4 +271,7 @@ def render_features(
                 f"{name}\t{sig2(value)}\t{NA if z is None else sig2(z)}"
                 f"\t{NA if pct is None else sig2(pct)}"
             )
-    return "\n".join(lines)
+    if evidence_prefix is None:
+        return "\n".join(lines)
+    body = [f"{evidence_prefix}_{i}\t{line}" for i, line in enumerate(lines[1:], start=1)]
+    return "\n".join([f"evidence_id\t{HEADER}", *body])
