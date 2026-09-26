@@ -11,14 +11,19 @@ import pytest
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import IntegrityError
 
+from contracts.commitment import commitment_hash
 from contracts.enums import (
     AgentName,
     BearSeverity,
+    BrokerOrderStatus,
     CioAction,
     DataSufficiency,
     FeedName,
     Horizon,
     KillTrigger,
+    OrderKind,
+    OrderSide,
+    ReferenceSource,
     RunMode,
     RunStatus,
     SizingMode,
@@ -35,6 +40,7 @@ from contracts.models import (
     DecisionCommitment,
     DlqRecord,
     EvidenceRef,
+    ExecutionRecord,
     KillSwitchEvent,
     PortfolioSnapshot,
     ProposedBook,
@@ -213,6 +219,9 @@ def step(run_id: UUID, security_id: int, **overrides: object) -> StepArtifacts:
         ),
     }
     fields.update(overrides)
+    if "commitment" not in overrides:  # a real hash, so the run can be verified from its rows
+        sha = commitment_hash(fields["run"], fields["decisions"], fields["portfolio"])  # type: ignore[arg-type]
+        fields["commitment"] = DecisionCommitment(run_id=run_id, sha256=sha, committed_at=AS_OF)
     return StepArtifacts.model_validate(fields)
 
 
@@ -292,21 +301,27 @@ def test_replaying_a_step_is_a_noop_and_the_run_moves_forward(engine: Engine, si
 def test_a_different_commitment_for_a_committed_run_is_refused(engine: Engine, sid: int) -> None:
     run_id = uuid4()
     sink = DecisionSink(engine)
-    sink.flush_step(step(run_id, sid))
+    first = step(run_id, sid)
+    assert first.commitment is not None
+    sink.flush_step(first)
     other = DecisionCommitment(run_id=run_id, sha256=SHA_B, committed_at=AS_OF)
     with pytest.raises(CommitmentMismatchError):
         sink.flush_step(step(run_id, sid, commitment=other))
     with engine.connect() as c:
-        assert c.execute(text("SELECT sha256 FROM decision_commitments")).scalar_one() == SHA_A
+        stored: Any = c.execute(text("SELECT sha256 FROM decision_commitments")).scalar_one()
+    assert stored == first.commitment.sha256
 
 
 def test_anchor_upgrade_keeps_the_hash(engine: Engine, sid: int) -> None:
     run_id = uuid4()
     sink = DecisionSink(engine)
-    sink.flush_step(step(run_id, sid))
-    sink.record_anchor(CommitmentAnchor(run_id=run_id, sha256=SHA_A, anchored_at=AS_OF))
+    first = step(run_id, sid)
+    assert first.commitment is not None
+    sha = first.commitment.sha256
+    sink.flush_step(first)
+    sink.record_anchor(CommitmentAnchor(run_id=run_id, sha256=sha, anchored_at=AS_OF))
     sink.record_anchor(
-        CommitmentAnchor(run_id=run_id, sha256=SHA_A, anchored_at=AS_OF, ots_proof=b"\x00proof")
+        CommitmentAnchor(run_id=run_id, sha256=sha, anchored_at=AS_OF, ots_proof=b"\x00proof")
     )
     with engine.connect() as c:
         proof: Any = c.execute(text("SELECT ots_proof FROM commitment_anchors")).scalar_one()
@@ -321,13 +336,13 @@ def test_between_step_records_dedupe(engine: Engine, sid: int) -> None:
     first = step(run_id, sid)
     sink.flush_step(first)
     sink.record_dlq(first.dlq)
-    sink.record_kill_switch(first.kill_switch[0])
+    sink.record_halt(first.kill_switch[0])
     assert counts(engine)["dlq_records"] == 1
     assert counts(engine)["kill_switch_events"] == 1
     manual = KillSwitchEvent(
         run_id=run_id, triggered_at=AS_OF, trigger=KillTrigger.MANUAL, flattened=True
     )
-    sink.record_kill_switch(manual)
+    sink.record_halt(manual)
     assert counts(engine)["kill_switch_events"] == 2
 
 
@@ -341,3 +356,34 @@ def test_only_a_manual_halt_flattens() -> None:
         KillSwitchEvent(
             run_id=uuid4(), triggered_at=AS_OF, trigger=KillTrigger.DAILY_LOSS, flattened=True
         )
+
+
+def test_execution_upsert_moves_forward_and_keeps_first_reference(engine: Engine, sid: int) -> None:
+    run_id = uuid4()
+    sink = DecisionSink(engine)
+    sink.flush_step(StepArtifacts(run=run_record(run_id)))
+    open_row = ExecutionRecord(
+        run_id=run_id, security_id=sid, client_order_id=f"{run_id}-{sid}-lim",
+        broker_order_id="B1", kind=OrderKind.LIMIT, side=OrderSide.BUY, qty=100.0,
+        filled_qty=0.0, limit_price=100.25, decision_price=99.0, reference_price=100.0,
+        reference_source=ReferenceSource.IEX_MID, status=BrokerOrderStatus.OPEN,
+        submitted_at=AS_OF,
+    )  # fmt: skip
+    sink.record_executions([open_row])
+    done = open_row.model_copy(
+        update={
+            "filled_qty": 37.0, "fill_price": 99.5, "slippage_bps": -50.0, "filled_at": AS_OF,
+            "status": BrokerOrderStatus.CANCELED, "reference_price": 555.0,
+            "reference_source": ReferenceSource.SIP_LAST,
+        }
+    )  # fmt: skip
+    sink.record_executions([done])
+    sink.record_executions([done])  # replay is a no-op
+    stored = sink.find_execution(open_row.client_order_id)
+    assert stored is not None
+    assert (stored.filled_qty, stored.fill_price, stored.slippage_bps) == (37.0, 99.5, -50.0)
+    assert stored.status is BrokerOrderStatus.CANCELED
+    assert (stored.reference_price, stored.reference_source) == (100.0, ReferenceSource.IEX_MID)
+    assert sink.find_execution("missing") is None
+    with engine.connect() as c:
+        assert c.execute(text("SELECT count(*) FROM orders")).scalar_one() == 1
