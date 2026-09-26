@@ -14,7 +14,7 @@ from hypothesis import strategies as st
 from pydantic import BaseModel, ValidationError
 
 from contracts import models as m
-from contracts.enums import AgentName, CioAction, DataSufficiency, FeedName, Horizon, Stance
+from contracts.enums import AgentName, CioAction, DataSufficiency, FeedName, Stance
 from tests.contracts.strategies import STRATEGIES
 
 ALL_MODELS = sorted(
@@ -87,8 +87,9 @@ VERDICT: dict[str, Any] = {
     "entity_token": "TICKER_07",
     "as_of": NOW,
     "stance": Stance.BUY,
-    "p_outperform": 0.6,
-    "horizon_days": Horizon.D21,
+    "p_outperform_5": 0.55,
+    "p_outperform_21": 0.6,
+    "p_outperform_63": 0.65,
     "key_evidence": [EVIDENCE],
     "risks": [],
     "data_sufficiency": DataSufficiency.FULL,
@@ -112,10 +113,10 @@ def test_verdict_requires_valid_flag() -> None:
 @pytest.mark.parametrize(
     "patch",
     [
-        {"p_outperform": 1.01},
-        {"p_outperform": -0.01},
-        {"p_outperform": float("nan")},
-        {"horizon_days": 42},
+        {"p_outperform_5": 1.01},
+        {"p_outperform_21": -0.01},
+        {"p_outperform_63": float("nan")},
+        {"horizon_days": 21},  # horizons are fixed by the system, not chosen by the model
         {"stance": "very_bullish"},
         {"data_sufficiency": "some"},
         {"agent": AgentName.RED_TEAM},

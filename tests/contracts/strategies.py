@@ -57,8 +57,9 @@ evidence_tuple = st.lists(evidence, min_size=1, max_size=5).map(tuple)
 
 agent_verdict_llm_kwargs: dict[str, st.SearchStrategy[Any]] = dict(
     stance=st.sampled_from(Stance),
-    p_outperform=prob,
-    horizon_days=st.sampled_from(Horizon),
+    p_outperform_5=prob,
+    p_outperform_21=prob,
+    p_outperform_63=prob,
     key_evidence=evidence_tuple,
     risks=st.lists(short, max_size=3).map(tuple),
     data_sufficiency=st.sampled_from(DataSufficiency),

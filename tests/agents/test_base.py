@@ -53,8 +53,9 @@ def _value_json(part: Partition, evidence: list[dict[str, str]] | None = None) -
     return json.dumps(
         {
             "stance": "buy",
-            "p_outperform": 0.6,
-            "horizon_days": 21,
+            "p_outperform_5": 0.55,
+            "p_outperform_21": 0.6,
+            "p_outperform_63": 0.65,
             "key_evidence": evidence if evidence is not None else [_cite(part)],
             "risks": ["thin margins"],
             "data_sufficiency": "full",
