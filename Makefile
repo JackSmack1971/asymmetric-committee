@@ -59,8 +59,18 @@ gate-P4: lint
 	REQUIRE_SERVICES=1 uv run pytest tests/contracts tests/config tests/features tests/agents tests/committee tests/risk
 	uv run python -m contracts.schema_export --check
 
-gate-P5:
-	@echo "gate-P5: not implemented"; exit 1
+# P5: lint (ruff, mypy --strict, import-linter) + the whole suite, because P5 sits on P1-P4, with
+# Postgres and Redis *required* (REQUIRE_SERVICES=1: a missing service fails, never skips) +
+# schema freshness. The suite includes the anchoring, Celery, kill-switch, execution and end-to-end
+# tests; all of them use local stand-ins (respx, a MockTransport Alpaca, a bare git repo), so the
+# gate makes no external call and needs no credentials. TimescaleDB is required by default so the
+# hypertable test must actually run; on a plain-Postgres dev box say so explicitly with
+# `make gate-P5 TIMESCALE=0` and treat that run as not gating. Services: TEST_DATABASE_URL,
+# TEST_REDIS_URL (or local binaries).
+TIMESCALE ?= 1
+gate-P5: lint
+	REQUIRE_SERVICES=1 REQUIRE_TIMESCALE=$(TIMESCALE) uv run pytest tests
+	uv run python -m contracts.schema_export --check
 
 gate-P6:
 	@echo "gate-P6: not implemented"; exit 1
