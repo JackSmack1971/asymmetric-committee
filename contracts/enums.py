@@ -132,6 +132,7 @@ class CioAction(StrEnum):
 class Horizon(IntEnum):
     """Scoring horizon in trading days (§3.1, §18.3)."""
 
+    D5 = 5
     D21 = 21
     D63 = 63
 

@@ -270,6 +270,86 @@ class CommitteeDecision(Contract):
         return self
 
 
+class HorizonPool(Contract):
+    """Pooled logit for one horizon (§7.1). ``weights`` are voting agents only."""
+
+    horizon: Horizon
+    logit: Finite  # L = sum_a w_a * z_a, before the stacker
+    lambda_t: Probability  # shrinkage toward equal weights actually applied
+    dispersion: NonNegative  # std of the agent logits
+    weights: tuple[AgentWeight, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _voting_weights(self) -> Self:
+        agents = [w.agent for w in self.weights]
+        if len(agents) != len(set(agents)) or not set(agents) <= VOTING_AGENTS:
+            raise ValueError("weights must be unique voting agents")
+        return self
+
+
+class PooledForecast(Contract):
+    """Committee pooling output for one entity, one pool per horizon."""
+
+    entity_token: EntityToken
+    pools: tuple[HorizonPool, ...] = Field(min_length=1)
+
+    def pool(self, horizon: Horizon) -> HorizonPool:
+        for p in self.pools:
+            if p.horizon == horizon:
+                return p
+        raise KeyError(horizon)
+
+    def weights(self, horizon: Horizon) -> dict[AgentName, float]:
+        return {w.agent: w.weight for w in self.pool(horizon).weights}
+
+    @property
+    def weights_d5(self) -> dict[AgentName, float]:
+        return self.weights(Horizon.D5)
+
+    @property
+    def weights_d21(self) -> dict[AgentName, float]:
+        return self.weights(Horizon.D21)
+
+    @property
+    def weights_d63(self) -> dict[AgentName, float]:
+        return self.weights(Horizon.D63)
+
+    @property
+    def logit_d5(self) -> float:
+        return self.pool(Horizon.D5).logit
+
+    @property
+    def logit_d21(self) -> float:
+        return self.pool(Horizon.D21).logit
+
+    @property
+    def logit_d63(self) -> float:
+        return self.pool(Horizon.D63).logit
+
+
+class CalibrationFit(Contract):
+    """Walk-forward stacker fit for one horizon (§7.2): ``p_cal = sigmoid(alpha + beta * L)``."""
+
+    horizon: Horizon
+    alpha: Finite
+    beta: Finite
+    active: bool  # False = pass-through (alpha 0, beta 1) before T_s independent periods
+    independent_periods: int = Field(ge=0)
+    observations: int = Field(ge=0)
+    base_rate: Probability | None  # trailing base rate anchoring alpha; None when not fitted
+
+
+class ErrorCorrelation(Contract):
+    """Agent error correlation and effective agent count for one horizon (§7.3)."""
+
+    horizon: Horizon
+    agents: int = Field(ge=2)
+    observations: int = Field(ge=2)
+    mean_correlation: Annotated[float, Field(ge=-1.0, le=1.0, allow_inf_nan=False)]
+    n_eff: Positive
+    monoculture_alert: bool  # n_eff < threshold
+
+
 class ProposedPosition(Contract):
     security_id: SecurityId
     entity_token: EntityToken

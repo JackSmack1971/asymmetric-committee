@@ -142,6 +142,42 @@ committee_decision = st.builds(
     target_weight=weight,
 )
 
+horizon_pool = st.builds(
+    m.HorizonPool,
+    horizon=st.sampled_from(Horizon),
+    logit=floats(),
+    lambda_t=prob,
+    dispersion=nonneg,
+    weights=agent_weights,
+)
+
+pooled_forecast = st.builds(
+    m.PooledForecast,
+    entity_token=entity_token,
+    pools=st.lists(horizon_pool, min_size=1, max_size=3).map(tuple),
+)
+
+calibration_fit = st.builds(
+    m.CalibrationFit,
+    horizon=st.sampled_from(Horizon),
+    alpha=floats(),
+    beta=floats(),
+    active=st.booleans(),
+    independent_periods=st.integers(min_value=0, max_value=10_000),
+    observations=st.integers(min_value=0, max_value=100_000),
+    base_rate=st.none() | prob,
+)
+
+error_correlation = st.builds(
+    m.ErrorCorrelation,
+    horizon=st.sampled_from(Horizon),
+    agents=st.integers(min_value=2, max_value=5),
+    observations=st.integers(min_value=2, max_value=100_000),
+    mean_correlation=st.floats(min_value=-1.0, max_value=1.0, allow_nan=False),
+    n_eff=st.floats(min_value=0.01, max_value=5.0, allow_nan=False),
+    monoculture_alert=st.booleans(),
+)
+
 proposed_position = st.builds(
     m.ProposedPosition,
     security_id=security_id,
@@ -253,6 +289,10 @@ STRATEGIES: dict[type[m.Contract], st.SearchStrategy[Any]] = {
     m.GateDecision: gate_decision,
     m.AgentWeight: agent_weights.map(lambda t: t[0]),
     m.CommitteeDecision: committee_decision,
+    m.HorizonPool: horizon_pool,
+    m.PooledForecast: pooled_forecast,
+    m.CalibrationFit: calibration_fit,
+    m.ErrorCorrelation: error_correlation,
     m.ProposedPosition: proposed_position,
     m.ProposedBook: proposed_book,
     m.OrderIntent: order_intent,

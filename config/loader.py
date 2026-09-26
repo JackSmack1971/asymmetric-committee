@@ -13,7 +13,14 @@ from typing import Annotated, Any, Self, TypeGuard
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from contracts.enums import BearSeverity, FeedName, Horizon, ModelTier, ReasoningEffort
+from contracts.enums import (
+    VOTING_AGENTS,
+    BearSeverity,
+    FeedName,
+    Horizon,
+    ModelTier,
+    ReasoningEffort,
+)
 from contracts.models import MAX_POSITION
 
 CONFIG_DIR = Path(__file__).parent
@@ -187,6 +194,11 @@ class RiskConfig(_Cfg):
     entry_threshold: Fraction
     k: PosFloat
     dispersion_lambda: Annotated[float, Field(ge=0.0, allow_inf_nan=False)]
+    # Committee sizing (§8.1); the quant baseline keeps k / dispersion_lambda / entry_threshold.
+    rank_top_m: int = Field(default=8, ge=1)
+    edge_hurdle: Fraction = 0.04  # calibrated mode enters at p_cal - b >= this
+    committee_k: PosFloat = 0.5
+    committee_dispersion_lambda: Annotated[float, Field(ge=0.0, allow_inf_nan=False)] = 0.0
     bear_multiplier: dict[BearSeverity, Fraction]
     cio_veto_budget: Fraction
     kill_switch_daily_loss: Fraction
@@ -253,16 +265,41 @@ class OrdersConfig(_Cfg):
     time_in_force_minutes: int = Field(ge=1, le=390)
 
 
+class ShrinkageConfig(_Cfg):
+    min_periods: int = Field(ge=0)  # T_w
+    tau: PosFloat
+
+
+class OverlapWeights(_Cfg):
+    d5: PosFloat
+    d21: PosFloat
+    d63: PosFloat
+
+    def for_horizon(self, horizon: Horizon) -> float:
+        return {Horizon.D5: self.d5, Horizon.D21: self.d21, Horizon.D63: self.d63}[horizon]
+
+
+class StackerConfig(_Cfg):
+    gamma_alpha: NonNegFloat
+    gamma_beta: NonNegFloat
+    activation_periods: int = Field(ge=1)  # T_s
+
+
 class CommitteeConfig(_Cfg):
     logit_clip: tuple[Fraction, Fraction]
     cold_start_min_verdicts: int = Field(ge=0)
     weight_floor: Annotated[float, Field(ge=0.0, allow_inf_nan=False)]
+    shrinkage: ShrinkageConfig
+    overlap_weights: OverlapWeights
+    stacker: StackerConfig
 
     @model_validator(mode="after")
     def _check(self) -> Self:
         lo, hi = self.logit_clip
         if not 0 < lo < 0.5 < hi < 1:
             raise ValueError("logit_clip must satisfy 0 < lo < 0.5 < hi < 1")
+        if self.weight_floor * len(VOTING_AGENTS) > 1:
+            raise ValueError("weight_floor x voting agents must be <= 1")
         return self
 
 

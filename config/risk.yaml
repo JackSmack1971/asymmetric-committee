@@ -9,9 +9,15 @@ entry_threshold: 0.56       # p_pool >= this to enter
 # SPEC-GAP: §8.1 gives no defaults for k or lambda. Placeholders, fix before P4.
 k: 0.02
 dispersion_lambda: 0.5
-bear_multiplier:            # §7: high halves the target weight
+# Committee sizing (§8.1): rank mode takes the top rank_top_m by pooled logit (inverse-vol);
+# calibrated mode enters at p_cal - b >= edge_hurdle with raw_w = committee_k * edge / sigma.
+rank_top_m: 8
+edge_hurdle: 0.04
+committee_k: 0.5            # owner directive (P4 step 3); baseline keeps k above
+committee_dispersion_lambda: 0.0  # §7.3 default
+bear_multiplier:            # §7.4: high halves the target weight; med is owner-set
   low: 1.0
-  med: 1.0
+  med: 0.75
   high: 0.5
 cio_veto_budget: 0.20       # §8.2: > 20% vetoed raises an alert
 kill_switch_daily_loss: 0.03  # §9

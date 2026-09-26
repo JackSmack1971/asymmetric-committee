@@ -31,7 +31,7 @@ from contracts.enums import (
         ),
         (RunMode, {"live", "backtest", "ablation"}),
         (CioAction, {"approve", "veto", "flag_for_review"}),
-        (Horizon, {21, 63}),
+        (Horizon, {5, 21, 63}),
         (
             RunStatus,
             {"PENDING", "INGEST_OK", "FEATURES_OK", "GATED", "AGENTS_OK", "COMMITTED",

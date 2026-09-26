@@ -11,8 +11,19 @@ orders:
 committee:
   logit_clip: [0.02, 0.98]
   cold_start_min_verdicts: 100
-  weight_floor: 0.05           # SPEC-GAP: §7 names w_floor without a value
-horizons: [21, 63]             # §18.3: log both until the primary is picked
+  weight_floor: 0.02           # w_floor: minimum pooling weight per voting agent (§7.1, owner-set)
+  shrinkage:                   # §7.1: lambda_t = 0 until T_w, then 1 - exp(-(T - T_w) / tau)
+    min_periods: 30            # T_w
+    tau: 26
+  overlap_weights:             # §7.1: 1 / overlap for weekly sampling; spec values, not 1/4.2, 1/12.6
+    d5: 1.0
+    d21: 0.25
+    d63: 0.0769                # ~1/13
+  stacker:                     # §7.2 ridge penalties: alpha -> logit(b), beta -> 1
+    gamma_alpha: 1.0
+    gamma_beta: 10.0
+    activation_periods: 8      # T_s
+horizons: [5, 21, 63]          # §3.1/§7.1 pool all three; §18.3: primary picked before P8
 llm:
   temperature: 0
   max_retries: 3

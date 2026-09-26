@@ -9,7 +9,7 @@ Read at the start of every session; update at the end. Spec: `docs/asymmetric-co
 | P1 Data | Done (pending PR merge) | `make gate-P1` passes (lint + import-linter + store/ingest/universe/config tests incl. backfill smoke) | `claude/bitemporal-timescaledb-as-of-9yro0f` | Schema + Alembic, `store/as_of.py`, 4 ingestors, EDGAR limiter, freshness, universe snapshots, backfill CLI. Plan: `docs/plans/P1.md`. 2-year real backfill still to run (needs network + keys). |
 | P2 Features + gate + baseline | Done (pending PR merge) | `make gate-P2` passes (lint + contracts/config + deterministic features, leak-safe gate, risk properties, 12-week smoke) | `phase/P2` | `fs_v1`; fixture gate recall: 100%. Plan: `docs/plans/P2.md`. |
 | P3 Agents | Not started | `make gate-P3` (stub) | `phase/P3` | |
-| P4 Committee + risk + CIO | Not started | `make gate-P4` (stub) | `phase/P4` | |
+| P4 Committee + risk + CIO | Implemented, gate not fully run | `make gate-P4` (lint + contracts/config/features/agents/committee/risk + schema check) | `phase/P4` | Plan: `docs/plans/P4.md`. Not marked Done: see P4 step 5. |
 | P5 Orchestration + execution | Not started | `make gate-P5` (stub) | `phase/P5` | |
 | P6 Evaluation | Not started | `make gate-P6` (stub) | `phase/P6` | |
 | P7 Dashboard | Not started | `make gate-P7` (stub) | `phase/P7` | |
@@ -89,3 +89,42 @@ Read at the start of every session; update at the end. Spec: `docs/asymmetric-co
 - `make gate-P3` implemented (lint + contracts/config/features/universe/agents with `REQUIRE_SERVICES=1` + `schema_export --check`).
 - Verified locally with Redis 7 and Postgres 16 (plain image, not TimescaleDB, pull failed) in Docker: all of those suites pass with zero skips; `test_llm_redis.py` is stable over 3 runs. `test_bucket_grants_burst_then_waits` was flawed (600 round trips let real refill hide the drain); now drains in one grant.
 - **Not verified:** `make` is not installed here, so the target itself was not run, only its commands. `make lint` also fails on the untracked `.agents/` skill scripts (not part of this change). P3 is therefore not marked done. Untracked `.agents/`, `AGENTS.md`, `docs/audits/` were left alone.
+
+## P4 step 1 (2026-09-25)
+
+- `Horizon.D5 = 5` added (IntEnum, so the value is `5`, not the directive's `"5d"`); `RedTeamVerdictLLM` schema regenerated, `--check` passes. New contracts `HorizonPool`, `PooledForecast` in `contracts/models.py`. `pipeline.yaml` `horizons` is now `[5, 21, 63]`.
+- Config: no `config/committee.yaml` (spec §15 lists none); parameters live in the existing `pipeline.yaml` `committee:` block (`weight_floor` 0.02, `shrinkage` T_w=30/τ=26, `overlap_weights`, `stacker` γα=1/γβ=10/T_s=8) and `risk.yaml` `bear_multiplier.med` 0.75.
+- **Owner conflict, resolved to spec:** directive overlap weights 1/4.2 and 1/12.6 vs spec §7.1 (1, 1/4, ~1/13). CLAUDE.md says spec wins, so config holds 1.0 / 0.25 / 0.0769. Say so if you want the directive values.
+- **Deferred to step 3 (sizing):** `k` 0.5, `λ_disp` 0.0 and the `p − b_h` edge change P2 baseline behaviour, so `risk.yaml` `k` (0.02) and `dispersion_lambda` (0.5) are untouched. Volatility is already annualized (P2).
+- `committee/pooling.py`: floor is enforced by pinning floored agents and rescaling the rest, because "floor then renormalize" can put a weight back under 0.02 and break the propagation test.
+- Not run: `make` (absent), `tests/store` (needs Postgres); 16 skips are service-gated.
+
+## P4 step 2 (2026-09-25)
+
+- `committee/stacker.py`: `fit_stacker` (pass-through alpha 0/beta 1 while independent periods < T_s = 8; otherwise ridge-logistic, alpha → logit(weighted trailing base rate, clipped to `logit_clip`), beta → 1, objective as directive: weighted NLL / M + γα/2 + γβ/2) and `compute_effective_agents` (Pearson error matrix, ρ̄, N_eff, `AlgorithmicMonocultureWarning` log at N_eff < 2). New contracts `CalibrationFit`, `ErrorCorrelation` (+ strategies).
+- **Deviation from directive:** no `scipy.optimize`. numpy/scipy are not dependencies; the objective is strictly convex in 2 parameters, so a damped Newton solve in pure Python is used (test asserts gradient ≈ 0 at the solution). Adding scipy is one line if you prefer it.
+- ρ̄ is computed on errors `p − y`, which share `−y`; independent-forecast agents therefore still show high ρ̄ (spec §7.3 as written). Read N_eff against that floor, not against A. Raise if you want a different definition.
+- Undefined cases raise `ValueError` (constant-error agent, ρ̄ ≤ −1/(A−1)) instead of guessing.
+- Not persisted: `calibration_models` write and evaluator wiring belong to later steps; the module takes resolved observations and `independent_periods` as inputs.
+- Verified: tests/committee, tests/contracts, tests/config pass; ruff, format, mypy --strict, schema_export --check, lint-imports clean. `make` absent, `make gate-P4` still a stub.
+
+## P4 step 3 (2026-09-25)
+
+- `risk/sizing.py::size_committee_book` (new; `size_book`/P2 baseline path untouched, only the sector-cap loop was extracted to `_cap_sectors`). Mode is `fit.active`: rank (top `rank_top_m`=8 by pooled logit at `fit.horizon`, inverse-vol, x S_bear) or calibrated (`p_cal - b >= edge_hurdle` 0.04, `committee_k` x edge / sigma x (1 - `committee_dispersion_lambda` x dispersion) x S_bear). Then cap 8%, sector 30%, 1% floor, vol target + gross <= 1, final floor pass (vol scaling can cross 1%; dropped weight is never redistributed). Residual is cash (`ProposedBook.cash_weight`).
+- `risk.yaml`/`RiskConfig`: new `rank_top_m`, `edge_hurdle`, `committee_k` 0.5, `committee_dispersion_lambda` 0.0 (defaults in the model so the baseline config and P2 tests are unchanged). Baseline keeps k 0.02, lambda 0.5, `entry_threshold` and the `p - 0.5` edge.
+- **Deviations from directive:** no `SizeEngine` class or numpy (function API in the repo's style, pure Python); the test suite is `tests/risk/test_committee_sizing.py` (property fuzz for bounds, vol target, residual cash). Directive floors before vol scaling and never re-checks; a final floor pass is kept so the "< 1% is 0" invariant holds after scaling.
+- **Open (spec §8.1):** the quant baseline is meant to run through the same mode; it still uses the P2 path. Calibrated mode is fed by the caller's `bear` map (red team runs on the top 15, §7.4); wiring is P5.
+
+## P4 step 4 (2026-09-25)
+
+- `agents/cio.py` + `prompts/agents/cio.py` (not in `PROMPTS`; that registry is the runner's voter/red-team set). `apply_cio_decision` (pure): vetoed names are removed from the `ProposedBook`, so their weight becomes residual cash; other weights are bit-identical. `run_cio`: one strong-tier call, one repair, `CioTierError` if `response.model` is outside the strong tier, `CioDecision.model_served` = served slug (invariant 7). Over-budget vetoes (`floor(M x cio_veto_budget)`, so 1 of 8; floor confirmed as the plan's open question default) raise `CioMiscalibrationAlert` from the pure function; `run_cio` catches it, pushes a DLQ record, discards all vetoes and returns the proposed book plus the logged decision.
+- **Directive deviations, spec wins:** (a) conformal act-vs-escalate is *not* built: spec §17 defers it ("needs a held-out calibration set"), and §8.2 has the CIO see the whole book. (b) No new contracts: `CioDecisionLLM`/`CioDecision` already exist per §8.2 with `approve|veto|flag_for_review`, `reason`, `rationale`; the directive's `KEEP|VETO`, `portfolio_commentary` and `CandidateAllocation` were not adopted. Schema `--check` unchanged. (c) Tests use `apply_cio_decision` / `run_cio` with a fake `ChatClient`, not `run_cio_governance(mock_response=...)`. (d) Model tier comes from `config/models.yaml` strong tier (slugs are still TODO placeholders), not a hard-coded Claude slug.
+- Not wired: persistence of `CioDecision`, task key `(run_id, cio, *)` idempotency and calling `run_cio` belong to P5 orchestration. `flag_for_review` keeps the name and is only logged.
+- Verified: tests/agents/test_cio.py (12), agents/contracts/config/committee/risk suites, ruff, mypy --strict, lint-imports, schema_export --check. `make gate-P4` still a stub (step 5).
+
+## P4 step 5 (2026-09-25)
+
+- `tests/committee/test_p4_e2e.py`: 5 cases (rank mode, calibrated mode, single CIO veto -> cash, veto-budget breach -> alert + DLQ + untouched book, red-team severity halves weight) over real pooling, stacker, `size_committee_book`, `apply_cio_decision`/`run_cio` with a fake strong-tier client. The directive's fixed numbers (equity 0.64, cash 0.36) are not hard-coded; assertions are relational (cash rises by exactly the vetoed weight, survivors bit-identical).
+- `make gate-P4` implemented in the P3 style (`lint`, pytest over the six suites with `REQUIRE_SERVICES=1`, `schema_export --check`). Directive's separate `ruff`/`mypy` lines are covered by `make lint`.
+- Verified: ruff, format, mypy --strict (project packages), lint-imports, schema_export --check clean; pytest over the six suites passes with 5 skips (Redis-gated).
+- **Not verified / why P4 is not marked Done:** `make` is absent, so the target itself was not run; Redis is unavailable so 5 agent tests skip (the gate sets `REQUIRE_SERVICES=1` and would fail here); `ruff check .` fails only on untracked `.agents/` scripts (not part of this change).
