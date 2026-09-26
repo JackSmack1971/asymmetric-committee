@@ -166,3 +166,54 @@ def test_constructor_validates_tokens() -> None:
         AliasMasker(aliases, {1: "acme"})
     with pytest.raises(ValueError, match="reserved"):
         AliasMasker(aliases, {1: SHARED_TOKEN})
+
+
+# --- PERSON aliases (named insiders) ----------------------------------------------------------
+
+
+def _with_people(filers: dict[int, list[str]]) -> AliasList:
+    from store.aliases import add_people
+
+    base = AliasList(as_of=AS_OF, securities=(ACME, ACME_ROBOTICS))
+    return add_people(base, filers)
+
+
+def test_person_token_is_stable_hashed_and_company_scoped() -> None:
+    from agents.partitioner import person_token
+
+    a = person_token("SMITH JOHN A", 320193)
+    assert a == person_token("  smith   john a ", 320193)  # canonicalised
+    assert a != person_token("SMITH JOHN A", 999)  # scoped to the company
+    assert a.startswith("EXEC_") and len(a) == len("EXEC_") + 8
+    assert all(c in "0123456789ABCDEF" for c in a[5:])
+
+
+def test_every_variant_of_a_filer_maps_to_one_token() -> None:
+    from agents.partitioner import person_token
+
+    masker = AliasMasker(_with_people({1: ["Rivera Maria L"]}), {1: "TICKER_01", 2: "TICKER_02"})
+    token = person_token("Rivera Maria L", 320193)
+    for text in ("RIVERA MARIA L", "Maria Rivera", "Maria L Rivera", "Maria L. Rivera", "Rivera"):
+        assert masker.mask(f"said {text} today") == f"said {token} today"
+    assert "Rivera" not in masker.mask("CEO Maria Rivera's plan; Rivera declined")
+
+
+def test_short_surnames_are_not_masked_alone_but_full_names_are() -> None:
+    masker = AliasMasker(_with_people({1: ["Cook Tim D"]}), {1: "TICKER_01", 2: "TICKER_02"})
+    assert masker.mask("A cook prepared it") == "A cook prepared it"
+    assert "Tim Cook" not in masker.mask("Tim Cook resigned")
+
+
+def test_person_shared_by_two_companies_masks_to_shared_token() -> None:
+    masker = AliasMasker(
+        _with_people({1: ["Rivera Maria L"], 2: ["Rivera Maria L"]}),
+        {1: "TICKER_01", 2: "TICKER_02"},
+    )
+    assert masker.mask("Maria Rivera") == SHARED_TOKEN
+
+
+def test_person_alias_contract_requires_canonical_only_for_person() -> None:
+    with pytest.raises(ValueError, match="canonical"):
+        Alias(text="Maria Rivera", kind=AliasKind.PERSON)
+    with pytest.raises(ValueError, match="canonical"):
+        Alias(text="Acme", kind=AliasKind.NAME, canonical="Acme")

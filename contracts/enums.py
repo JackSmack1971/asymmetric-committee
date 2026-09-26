@@ -229,3 +229,4 @@ class AliasKind(StrEnum):
     TICKER = "ticker"
     CIK = "cik"
     BRAND = "brand"
+    PERSON = "person"  # a named insider or executive (Form 4 filer)

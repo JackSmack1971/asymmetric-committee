@@ -18,6 +18,7 @@ Matching rules, all covered by tests:
 
 from __future__ import annotations
 
+import hashlib
 import re
 import unicodedata
 from collections.abc import Mapping
@@ -29,6 +30,7 @@ from contracts.enums import AliasKind
 from contracts.models import EntityToken
 
 SHARED_TOKEN = "ENTITY_00"
+PERSON_TOKEN_HEX = 8  # 32 bits: collisions stay negligible across a company's filers
 
 _TOKEN = TypeAdapter(EntityToken)
 _APOSTROPHES = str.maketrans({"\u2019": "'", "\u2018": "'", "\u02bc": "'"})
@@ -46,6 +48,13 @@ def _canon(text: str) -> str:
     return " ".join(_normalize(text).split())
 
 
+def person_token(canonical_name: str, cik: int) -> str:
+    """Stable pseudonym for an insider: ``EXEC_`` + SHA-256(name || CIK). Same person, same token
+    across runs; the CIK scopes it to one company so a shared name never links two firms."""
+    digest = hashlib.sha256(f"{_canon(canonical_name).casefold()}||{cik}".encode()).hexdigest()
+    return f"EXEC_{digest[:PERSON_TOKEN_HEX].upper()}"
+
+
 def _words(text: str) -> str:
     return r"\s+".join(re.escape(part) for part in text.split(" "))
 
@@ -54,7 +63,7 @@ def _fragments(alias: Alias) -> tuple[list[str], list[str]]:
     """Regex fragments and the lookup keys a match of them resolves through."""
     canon = _canon(alias.text)
     match alias.kind:
-        case AliasKind.NAME | AliasKind.BRAND:
+        case AliasKind.NAME | AliasKind.BRAND | AliasKind.PERSON:
             forms = dict.fromkeys((canon, canon.casefold()))
             return [f"(?i:{'|'.join(_words(f) for f in forms)})"], [canon.casefold()]
         case AliasKind.TICKER:
@@ -95,12 +104,16 @@ class AliasMasker:
             raise ValueError(f"{SHARED_TOKEN} is reserved for shared aliases")
         self._tokens = dict(tokens)
         self._owners: dict[str, set[int]] = {}
+        self._person: dict[str, str] = {}
         fragments: dict[str, int] = {}
         for sec in aliases.securities:
+            cik = next(int(a.text) for a in sec.aliases if a.kind is AliasKind.CIK)
             for alias in sec.aliases:
                 frags, keys = _fragments(alias)
                 for key in keys:
                     self._owners.setdefault(key, set()).add(sec.security_id)
+                    if alias.kind is AliasKind.PERSON and alias.canonical is not None:
+                        self._person[key] = person_token(alias.canonical, cik)
                 for frag in frags:
                     fragments[frag] = max(fragments.get(frag, 0), len(_canon(alias.text)))
         ordered = sorted(fragments, key=lambda f: (-fragments[f], f))
@@ -112,7 +125,12 @@ class AliasMasker:
             owners |= self._owners.get(key, set())
         if not owners:
             return match.group()
-        return SHARED_TOKEN if len(owners) > 1 else self._tokens[next(iter(owners))]
+        if len(owners) > 1:
+            return SHARED_TOKEN
+        for key in _candidate_keys(match.group()):
+            if key in self._person:
+                return self._person[key]
+        return self._tokens[next(iter(owners))]
 
     def mask(self, text: str) -> str:
         text = _normalize(text)

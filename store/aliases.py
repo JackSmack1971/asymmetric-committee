@@ -49,6 +49,47 @@ def security_aliases(
     return SecurityAliases(security_id=security.security_id, aliases=tuple(aliases))
 
 
+_SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "md", "phd"}
+_MIN_SURNAME = 5  # shorter surnames are common words ("Cook", "May"); full names still mask
+
+
+def name_variants(filed: str) -> list[str]:
+    """Forms of a Form 4 owner name that prose uses. EDGAR files ``"SMITH JOHN A"`` (surname
+    first); ``"Smith, John A"`` is also handled. Surname-only is included from 5 letters up."""
+    text = filed.strip()
+    if "," in text:
+        last, _, rest = text.partition(",")
+        last, parts = last.strip(), rest.split()
+    else:
+        last, *parts = text.split()
+    parts = [p.strip(".") for p in parts if p.strip(".").lower() not in _SUFFIXES]
+    if not last or not parts:
+        return [text]
+    given, initials = parts[0], parts[1:]
+    forms = [text, f"{given} {last}"]
+    if initials:
+        forms.append(f"{given} {' '.join(initials)} {last}")
+        forms.append(f"{given} {' '.join(i + '.' for i in initials)} {last}")
+    if last.isalpha() and len(last) >= _MIN_SURNAME:
+        forms.append(last)
+    return list(dict.fromkeys(f for f in forms if len(f) >= _MIN_SHORT_NAME))
+
+
+def add_people(alias_list: AliasList, filers: Mapping[int, Sequence[str]]) -> AliasList:
+    """Add PERSON aliases (Form 4 filers, by security_id) so the masker hides named insiders."""
+    out: list[SecurityAliases] = []
+    for sec in alias_list.securities:
+        seen = {(a.kind, a.text.casefold()) for a in sec.aliases}
+        extra: list[Alias] = []
+        for filer in dict.fromkeys(filers.get(sec.security_id, ())):
+            for text in name_variants(filer):
+                if (AliasKind.PERSON, text.casefold()) not in seen:
+                    seen.add((AliasKind.PERSON, text.casefold()))
+                    extra.append(Alias(text=text, kind=AliasKind.PERSON, canonical=filer.strip()))
+        out.append(SecurityAliases(security_id=sec.security_id, aliases=(*sec.aliases, *extra)))
+    return AliasList(as_of=alias_list.as_of, securities=tuple(out))
+
+
 def build_alias_list(
     securities: Sequence[Security],
     as_of: datetime,

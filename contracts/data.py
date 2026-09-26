@@ -141,9 +141,12 @@ class Alias(Contract):
 
     text: AliasText
     kind: AliasKind
+    canonical: AliasText | None = None  # PERSON only: the filed name every variant hashes from
 
     @model_validator(mode="after")
     def _check(self) -> Self:
+        if (self.kind is AliasKind.PERSON) != (self.canonical is not None):
+            raise ValueError("canonical is required for, and only for, person aliases")
         if self.kind is AliasKind.CIK and not (self.text.isascii() and self.text.isdecimal()):
             raise ValueError("cik alias must be decimal digits")
         if self.kind is AliasKind.CIK and int(self.text) < 1:
