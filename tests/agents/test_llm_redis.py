@@ -14,11 +14,10 @@ from agents.llm.store import DLQ_KEY, RedisDeadLetterQueue, RedisVerdictCache
 def test_bucket_grants_burst_then_waits(redis_client: redis.Redis) -> None:
     waits: list[float] = []
     bucket = RedisTokenBucket(redis_client, "b", 600, sleep=lambda s: waits.append(s))
-    for _ in range(600):
-        bucket.acquire(1)  # a full minute's burst is available at once
+    bucket.acquire(600)  # a full minute's burst is available at once, in one atomic grant
     assert waits == []
-    # Drained: the next call must wait ~100 ms (600/min = 10/s); the fake sleep does not advance
-    # time, so it polls a few times before the real clock refills a token.
+    # Drained: the next call must wait ~100 ms (600/min = 10/s). One grant, not 600 round trips,
+    # so real refill during the drain cannot hide the wait.
     real: list[float] = []
 
     def sleep(s: float) -> None:
