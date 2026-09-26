@@ -18,6 +18,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     MetaData,
     Table,
     Text,
@@ -207,6 +208,8 @@ runs = Table(
     Column("status", Text, nullable=False),
     _ts("started_at"),
     _ts("ended_at", nullable=True),
+    Column("status_reason", Text),
+    Column("total_cost_usd", Double, nullable=False, server_default="0"),
 )
 
 
@@ -252,12 +255,58 @@ committee_decisions = Table(
     metadata,
     _run_id(),
     _sid(),
+    Column("horizon", Integer, nullable=False),
     Column("pooled_p", Double, nullable=False),
+    Column("pooled_logit", Double),
     Column("dispersion", Double, nullable=False),
+    Column("sizing_mode", Text),
+    Column("bear_severity", Text),
+    Column("weights", JSONB, nullable=False),  # per-agent pooling weights (§7), not portfolio
     Column("target_weight", Double, nullable=False),
     Column("cio_action", Text),
     Column("rationale", Text),
-    UniqueConstraint("run_id", "security_id", name="uq_committee_decisions"),
+    UniqueConstraint("run_id", "security_id", "horizon", name="uq_committee_decisions"),
+)
+
+# Final book after the CIO; cash is the stored residual (§8.1).
+portfolio_snapshots = Table(
+    "portfolio_snapshots",
+    metadata,
+    Column("run_id", UUID(as_uuid=True), ForeignKey("runs.run_id"), primary_key=True),
+    _ts("as_of"),
+    Column("cash_weight", Double, nullable=False),
+    Column("book", JSONB, nullable=False),
+    Column("cio", JSONB),
+)
+
+# Failed or aborted tasks. dedupe_key makes a replayed step a no-op.
+dlq_records = Table(
+    "dlq_records",
+    metadata,
+    Column("dlq_id", BigInteger, primary_key=True, autoincrement=True),
+    _run_id(),
+    _ts("as_of"),
+    Column("agent", Text, nullable=False),
+    Column("error_type", Text, nullable=False),
+    Column("payload", JSONB, nullable=False),
+    Column("dedupe_key", Text, nullable=False),
+    UniqueConstraint("run_id", "dedupe_key", name="uq_dlq_records"),
+)
+
+# Kill-switch halts (§9). The run itself goes PARTIAL; this row carries the detail.
+kill_switch_events = Table(
+    "kill_switch_events",
+    metadata,
+    Column("event_id", BigInteger, primary_key=True, autoincrement=True),
+    _run_id(),
+    _ts("triggered_at"),
+    Column("trigger", Text, nullable=False),
+    Column("daily_loss", Double),
+    Column("peak_drawdown", Double),
+    Column("cancelled_order_ids", ARRAY(Text), nullable=False),
+    Column("flattened", Boolean, nullable=False),
+    Column("dedupe_key", Text, nullable=False),
+    UniqueConstraint("run_id", "dedupe_key", name="uq_kill_switch_events"),
 )
 
 # Append-only: a trigger rejects UPDATE and DELETE (invariant 5).
@@ -267,6 +316,18 @@ decision_commitments = Table(
     Column("run_id", UUID(as_uuid=True), ForeignKey("runs.run_id"), primary_key=True),
     Column("sha256", Text, nullable=False),
     Column("committed_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+)
+
+# External anchor of the commitment (§12.2). The hash never changes; the proof is upgraded later.
+commitment_anchors = Table(
+    "commitment_anchors",
+    metadata,
+    Column("run_id", UUID(as_uuid=True), ForeignKey("runs.run_id"), primary_key=True),
+    Column("sha256", Text, nullable=False),
+    Column("ots_proof", LargeBinary),
+    Column("git_commit", Text),
+    _ts("anchored_at"),
+    _ts("verified_at", nullable=True),
 )
 
 orders = Table(
