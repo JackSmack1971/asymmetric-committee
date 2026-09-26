@@ -51,6 +51,7 @@ def edit(cfg_dir: Path, name: str, path: list[str], value: object) -> None:
 
 def fill_placeholders(cfg_dir: Path) -> None:
     edit(cfg_dir, "universe", ["sectors"], ["Semiconductors"])
+    edit(cfg_dir, "sectors", ["confirmed"], True)
     for tier, slug in [("fast", "a/fast"), ("strong", "a/strong"), ("probe", "a/fast")]:
         edit(cfg_dir, "models", ["tiers", tier, "primary", "slug"], slug)
         edit(cfg_dir, "models", ["tiers", tier, "fallbacks"], [])
@@ -181,3 +182,25 @@ def test_load_universe_file() -> None:
     from config.loader import load_universe
 
     assert load_universe(CONFIG_DIR / "universe.yaml").top_n == 40
+
+
+def test_sectors_crosswalk_lookup() -> None:
+    sectors = load_config(allow_placeholders=True, env={}).sectors
+    assert {e.etf for e in sectors.sectors} >= {"XLK", "XLE", "XLF"}
+    hit = sectors.sector_for_sic(6021)
+    assert hit is not None and hit.etf == "XLF"
+    assert sectors.sector_for_sic(9999) is None
+
+
+def test_unconfirmed_sectors_rejected_in_production(cfg_dir: Path) -> None:
+    with pytest.raises(ConfigError, match="not owner-confirmed"):
+        load_config(cfg_dir, env={})
+
+
+def test_overlapping_sic_ranges_rejected(cfg_dir: Path) -> None:
+    path = cfg_dir / "sectors.yaml"
+    data = yaml.safe_load(path.read_text())
+    data["sectors"][0]["sic_ranges"].append([6000, 6010])
+    path.write_text(yaml.safe_dump(data))
+    with pytest.raises(ConfigError, match="overlapping"):
+        load_config(cfg_dir, allow_placeholders=True, env={})

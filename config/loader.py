@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from datetime import date
 from enum import StrEnum
+from itertools import pairwise
 from pathlib import Path
 from typing import Annotated, Any, Self
 
@@ -211,6 +212,45 @@ class PipelineConfig(_Cfg):
     freshness_sla_hours: dict[FeedName, PosFloat] = Field(min_length=1)
 
 
+# --- sectors.yaml ----------------------------------------------------------------------------
+
+
+class SectorEntry(_Cfg):
+    sector: str = Field(min_length=1)
+    etf: str = Field(min_length=1)
+    sic_ranges: tuple[tuple[int, int], ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _ranges_valid(self) -> Self:
+        for lo, hi in self.sic_ranges:
+            if not 0 <= lo <= hi <= 9999:
+                raise ValueError(f"bad SIC range [{lo}, {hi}]")
+        return self
+
+
+class SectorsConfig(_Cfg):
+    confirmed: bool  # owner sign-off on the crosswalk; False = draft
+    sectors: tuple[SectorEntry, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _unique_and_disjoint(self) -> Self:
+        for attr in ("sector", "etf"):
+            names = [getattr(e, attr) for e in self.sectors]
+            if len(set(names)) != len(names):
+                raise ValueError(f"duplicate {attr}")
+        spans = sorted((lo, hi, e.sector) for e in self.sectors for lo, hi in e.sic_ranges)
+        for (_, hi, a), (lo, _, b) in pairwise(spans):
+            if lo <= hi:
+                raise ValueError(f"overlapping SIC ranges: {a} / {b}")
+        return self
+
+    def sector_for_sic(self, sic: int) -> SectorEntry | None:
+        for entry in self.sectors:
+            if any(lo <= sic <= hi for lo, hi in entry.sic_ranges):
+                return entry
+        return None
+
+
 # --- top level -------------------------------------------------------------------------------
 
 
@@ -219,6 +259,7 @@ class AppConfig(_Cfg):
     risk: RiskConfig
     universe: UniverseConfig
     pipeline: PipelineConfig
+    sectors: SectorsConfig
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
@@ -240,6 +281,8 @@ def _placeholders(cfg: AppConfig) -> list[str]:
     ]
     if not cfg.universe.sectors:
         found.append("universe.sectors is empty")
+    if not cfg.sectors.confirmed:
+        found.append("sectors.yaml crosswalk is not owner-confirmed")
     return found
 
 
