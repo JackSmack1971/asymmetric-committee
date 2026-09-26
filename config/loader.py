@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import math
 import os
 from datetime import date
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated, Any, Self
+from typing import Annotated, Any, Self, TypeGuard
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -19,6 +20,9 @@ PLACEHOLDER_PREFIX = "TODO"
 
 Fraction = Annotated[float, Field(ge=0.0, le=1.0, allow_inf_nan=False)]
 PosFloat = Annotated[float, Field(gt=0.0, allow_inf_nan=False)]
+NonNegFloat = Annotated[float, Field(ge=0.0, allow_inf_nan=False)]
+
+TOKENS_PER_PRICE_UNIT = 1_000_000
 
 
 class ConfigError(RuntimeError):
@@ -32,10 +36,64 @@ class _Cfg(BaseModel):
 # --- models.yaml -----------------------------------------------------------------------------
 
 
+class CostSource(StrEnum):
+    LOCAL = "local"  # tokens x configured prices (authoritative)
+    PROVIDER_FALLBACK = "provider_fallback"  # usage tokens missing; provider-returned cost used
+
+
+class UsageUnavailableError(RuntimeError):
+    """Neither usage tokens nor a provider cost came back; the call cannot be costed."""
+
+
+class CallCost(_Cfg):
+    usd: NonNegFloat
+    source: CostSource
+
+
 class ServedModel(_Cfg):
     slug: str = Field(min_length=1)
     stated_training_cutoff: date
     supports_structured_outputs: bool
+    rpm: int = Field(gt=0)  # requests per minute (token bucket, §10.2)
+    tpm: int = Field(gt=0)  # tokens per minute (token bucket, §10.2)
+    input_price_usd_per_mtok: NonNegFloat
+    output_price_usd_per_mtok: NonNegFloat
+
+    def local_cost_usd(self, prompt_tokens: int, completion_tokens: int) -> float:
+        if prompt_tokens < 0 or completion_tokens < 0:
+            raise ValueError("token counts must be non-negative")
+        return (
+            prompt_tokens * self.input_price_usd_per_mtok
+            + completion_tokens * self.output_price_usd_per_mtok
+        ) / TOKENS_PER_PRICE_UNIT
+
+    def call_cost(self, usage: dict[str, Any] | None) -> CallCost:
+        """Cost of one OpenRouter call from its ``usage`` block (§10.2 budget policy).
+
+        The locally computed cost (usage tokens x configured prices) is authoritative: it is
+        deterministic and reproducible from config. The provider-returned ``usage.cost`` is
+        never used when both token counts are present, even if it differs. If a token count is
+        missing, the provider cost is the fallback. If that is missing too, raise
+        ``UsageUnavailableError`` so the caller fails closed (run ``PARTIAL``) rather than
+        booking $0.
+        """
+        usage = usage or {}
+        prompt, completion = usage.get("prompt_tokens"), usage.get("completion_tokens")
+        if _is_count(prompt) and _is_count(completion):
+            return CallCost(usd=self.local_cost_usd(prompt, completion), source=CostSource.LOCAL)
+        provider = usage.get("cost")
+        if (
+            isinstance(provider, int | float)
+            and not isinstance(provider, bool)
+            and math.isfinite(provider)
+            and provider >= 0
+        ):
+            return CallCost(usd=float(provider), source=CostSource.PROVIDER_FALLBACK)
+        raise UsageUnavailableError(f"no usable usage or cost for {self.slug!r}")
+
+
+def _is_count(value: object) -> TypeGuard[int]:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 class ModelEntry(_Cfg):

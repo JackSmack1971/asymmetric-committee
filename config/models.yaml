@@ -1,6 +1,9 @@
 # LLM model tiers (§10.1). The evaluator reads stated_training_cutoff to pick valid backtest
 # windows (§12.1): valid window starts after the latest cutoff + 60 days.
 #
+# rpm/tpm: provider limits per slug (positive ints; Redis token bucket, §10.2). Prices: USD per
+# 1M tokens (>= 0). Cost policy: local tokens x prices is authoritative (§10.2 Budget).
+#
 # TODO(owner): replace every "TODO/..." slug with a pinned OpenRouter slug and its metadata.
 # The loader refuses placeholders unless allow_placeholders=True (tests only).
 tiers:
@@ -9,22 +12,42 @@ tiers:
       slug: "TODO/fast-model"
       stated_training_cutoff: 2000-01-01   # TODO
       supports_structured_outputs: true
+      rpm: 60                # TODO
+      tpm: 200000            # TODO
+      input_price_usd_per_mtok: 1.0    # TODO
+      output_price_usd_per_mtok: 3.0   # TODO
     fallbacks:
       - slug: "TODO/fast-fallback"
         stated_training_cutoff: 2000-01-01   # TODO
         supports_structured_outputs: true
+        rpm: 60                # TODO
+        tpm: 200000            # TODO
+        input_price_usd_per_mtok: 1.0    # TODO
+        output_price_usd_per_mtok: 3.0   # TODO
   strong:      # Red team, CIO
     primary:
       slug: "TODO/strong-model"
       stated_training_cutoff: 2000-01-01   # TODO
       supports_structured_outputs: true
+      rpm: 60                # TODO
+      tpm: 200000            # TODO
+      input_price_usd_per_mtok: 1.0    # TODO
+      output_price_usd_per_mtok: 3.0   # TODO
     fallbacks:
       - slug: "TODO/strong-fallback"
         stated_training_cutoff: 2000-01-01   # TODO
         supports_structured_outputs: true
+        rpm: 60                # TODO
+        tpm: 200000            # TODO
+        input_price_usd_per_mtok: 1.0    # TODO
+        output_price_usd_per_mtok: 3.0   # TODO
   probe:       # Memorization probes (§12.1): must be a production model
     primary:
       slug: "TODO/fast-model"
       stated_training_cutoff: 2000-01-01   # TODO
       supports_structured_outputs: true
+      rpm: 60                # TODO
+      tpm: 200000            # TODO
+      input_price_usd_per_mtok: 1.0    # TODO
+      output_price_usd_per_mtok: 3.0   # TODO
     fallbacks: []
