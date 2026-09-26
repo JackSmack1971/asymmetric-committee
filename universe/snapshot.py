@@ -12,6 +12,7 @@ from __future__ import annotations
 import calendar
 import hashlib
 import math
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, date, datetime, time, timedelta
 
 from config.loader import UniverseConfig
@@ -19,6 +20,7 @@ from contracts.data import Security, UniverseMember
 from contracts.enums import McapTier
 from ingest.timeutil import at_et
 from store import as_of
+from store.aliases import short_names
 from store.as_of import Conn
 from store.write import insert_universe_snapshot
 
@@ -123,3 +125,40 @@ def snapshot_month_ends(conn: Conn, start: date, end: date, cfg: UniverseConfig)
     return sum(
         insert_universe_snapshot(conn, build_snapshot(conn, d, cfg)) for d in month_ends(start, end)
     )
+
+
+class AliasCoverageError(ValueError):
+    """Included securities whose colloquial short name is not in ``config/aliases.yaml``."""
+
+
+def colloquial_short_name(name: str) -> str | None:
+    """First word of the legal-suffix-stripped name (``"Zephyr Dynamics Corp."`` -> ``"Zephyr"``).
+
+    Prose uses it alone, and the identity aliases (full and stripped name) do not cover it.
+    ``None`` for single-word names: the stripped name already is the short name.
+    """
+    stripped = (short_names(name) or [name.strip()])[0]
+    words = stripped.split()
+    return words[0] if len(words) > 1 and len(words[0]) >= 3 else None
+
+
+def alias_coverage_gaps(
+    securities: Iterable[Security], brands: Mapping[int, Sequence[str]]
+) -> dict[int, str]:
+    """``security_id -> short name`` for every security whose short name is not a brand alias."""
+    gaps: dict[int, str] = {}
+    for sec in securities:
+        short = colloquial_short_name(sec.name)
+        covered = {b.casefold() for b in brands.get(sec.cik, ())}
+        if short is not None and short.casefold() not in covered:
+            gaps[sec.security_id] = short
+    return gaps
+
+
+def assert_alias_coverage(
+    securities: Iterable[Security], brands: Mapping[int, Sequence[str]]
+) -> None:
+    """Invariant 4 guard (§12.1): fail before agents run if a short name would reach a prompt."""
+    if gaps := alias_coverage_gaps(securities, brands):
+        listing = ", ".join(f"security {sid}: {name}" for sid, name in sorted(gaps.items()))
+        raise AliasCoverageError(f"short names missing from config/aliases.yaml: {listing}")
