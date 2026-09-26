@@ -37,3 +37,13 @@ freshness_sla_hours:
   fundamentals: 36
   insider_trades: 36
   news: 1
+# Beat cadence per feed (§4.1: bars EOD, XBRL and Form 4 daily, news 15 min). Each must be shorter
+# than its SLA above, or a healthy feed could read stale. Each poll re-reads `lookback_days` back;
+# inserts are idempotent, so overlap only guards against a missed poll.
+ingest:
+  cadence_minutes:
+    price_bars: 1440
+    fundamentals: 1440
+    insider_trades: 1440
+    news: 15
+  lookback_days: 7

@@ -313,6 +313,13 @@ class BudgetsConfig(_Cfg):
     run_budget_usd: PosFloat
 
 
+class IngestConfig(_Cfg):
+    """Beat cadence per feed (§4.1) and how far back each poll re-reads (idempotent inserts)."""
+
+    cadence_minutes: dict[FeedName, PosFloat] = Field(min_length=1)
+    lookback_days: int = Field(ge=1, le=30)
+
+
 class PipelineConfig(_Cfg):
     gate: GateConfig
     rebalance: RebalanceConfig
@@ -322,6 +329,20 @@ class PipelineConfig(_Cfg):
     llm: LlmConfig
     budgets: BudgetsConfig
     freshness_sla_hours: dict[FeedName, PosFloat] = Field(min_length=1)
+    ingest: IngestConfig
+
+    @model_validator(mode="after")
+    def _cadence_meets_sla(self) -> Self:
+        """Every SLA'd feed is polled, and polled more often than its SLA lets it go stale."""
+        cadence = self.ingest.cadence_minutes
+        if set(cadence) != set(self.freshness_sla_hours):
+            raise ValueError(
+                "ingest.cadence_minutes must cover exactly the freshness_sla_hours feeds"
+            )
+        for feed, minutes in cadence.items():
+            if minutes / 60 >= self.freshness_sla_hours[feed]:
+                raise ValueError(f"{feed.value}: ingest cadence must be shorter than its SLA")
+        return self
 
 
 # --- sectors.yaml ----------------------------------------------------------------------------
