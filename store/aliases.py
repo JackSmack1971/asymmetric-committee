@@ -30,12 +30,17 @@ def short_names(name: str) -> list[str]:
 
 
 def security_aliases(
-    security: Security, brands: Mapping[int, Sequence[str]] | None = None
+    security: Security,
+    brands: Mapping[int, Sequence[str]] | None = None,
+    symbols: Sequence[str] = (),
 ) -> SecurityAliases:
+    """``symbols`` are every ticker the security has traded under (P6.4 ``security_symbols``): a
+    renamed security's former ticker must stay masked."""
     candidates = [
         (security.name.strip(), AliasKind.NAME),
         *((n, AliasKind.NAME) for n in short_names(security.name)),
         (security.ticker, AliasKind.TICKER),
+        *((sym, AliasKind.TICKER) for sym in symbols),
         (str(security.cik), AliasKind.CIK),
         *((b.strip(), AliasKind.BRAND) for b in (brands or {}).get(security.cik, ())),
     ]
@@ -94,9 +99,13 @@ def build_alias_list(
     securities: Sequence[Security],
     as_of: datetime,
     brands: Mapping[int, Sequence[str]] | None = None,
+    symbols: Mapping[int, Sequence[str]] | None = None,
 ) -> AliasList:
-    """``brands`` maps CIK -> brand/product aliases (``config.aliases``)."""
+    """``brands`` maps CIK -> brand/product aliases (``config.aliases``); ``symbols`` maps
+    security_id -> every ticker it has traded under."""
     return AliasList(
         as_of=as_of,
-        securities=tuple(security_aliases(s, brands) for s in securities),
+        securities=tuple(
+            security_aliases(s, brands, (symbols or {}).get(s.security_id, ())) for s in securities
+        ),
     )

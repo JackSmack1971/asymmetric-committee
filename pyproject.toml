@@ -99,6 +99,18 @@ source_modules = [
 forbidden_modules = ["store", "orchestration", "ingest", "sqlalchemy", "psycopg"]
 allow_indirect_imports = true
 
+# P6.4: backfill evidence is sensitivity/debug only. Decision, scoring, evaluation and run code may
+# never import the reader that can see it (headline readers in store.as_of are prospective-only).
+[[tool.importlinter.contracts]]
+name = "Backfill sensitivity readers stay out of production decision and scoring paths"
+type = "forbidden"
+source_modules = [
+    "agents", "features", "gate", "committee", "risk", "evaluation", "universe", "execution",
+    "orchestration",
+]
+forbidden_modules = ["store.as_of_sensitivity"]
+allow_indirect_imports = true
+
 # P5: run outputs are written by orchestration/sink.py and nowhere else in orchestration.
 [[tool.importlinter.contracts]]
 name = "Only orchestration.sink writes run outputs"

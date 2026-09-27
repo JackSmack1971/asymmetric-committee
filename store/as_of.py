@@ -13,11 +13,21 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel
 from sqlalchemy import Column, ColumnElement, Connection, Table, and_, func, select
 from sqlalchemy.dialects.postgresql import distinct_on
 
+from contracts.corporate_actions import (
+    AssetStatusObservation,
+    CorporateAction,
+    CorporateActionCoverage,
+    Delisting,
+    DelistingFiling,
+    IdentityConflict,
+    SecuritySymbol,
+)
 from contracts.data import (
     AliasList,
     FeatureRow,
@@ -30,7 +40,7 @@ from contracts.data import (
     Security,
     UniverseMember,
 )
-from contracts.enums import FeedName, SecurityKind
+from contracts.enums import FeedName, KnowledgeBasis, SecurityKind
 from contracts.market_data import (
     CalendarCoverage,
     ExecutionReference,
@@ -50,9 +60,16 @@ Conn = Connection
 
 __all__ = [
     "Conn",
+    "action_coverage",
     "alias_list",
+    "asset_status",
+    "bar_dates",
     "calendar_coverage",
     "calendar_sessions",
+    "corporate_actions",
+    "delisting",
+    "delisting_filings",
+    "delisting_history",
     "execution_references",
     "feature_rows",
     "feed_health",
@@ -61,12 +78,16 @@ __all__ = [
     "halt_reference_requests",
     "halt_references",
     "halt_symbol_set",
+    "identity_conflicts",
     "insider_txns",
     "news",
     "pending_halt_requests",
     "prices",
     "reference_instruments",
     "securities",
+    "security_cik",
+    "security_symbols",
+    "symbol_history",
     "tbill_rates",
     "tbill_vintage_coverage",
     "trading_calendar",
@@ -247,7 +268,18 @@ def alias_list(
     """
     _check_ts(as_of)
     listed = securities(conn, security_ids, listed_on=as_of.astimezone(UTC).date())
-    return build_alias_list(listed, as_of, brands)
+    # Every ticker a listed security has traded under stays masked (a rename keeps its id). Masking
+    # a symbol recorded after ``as_of`` hides more, never less, and the list never reaches an LLM.
+    sym = t.security_symbols.c
+    symbols: dict[int, list[str]] = {}
+    rows = conn.execute(
+        select(sym.security_id, sym.symbol)
+        .where(sym.security_id.in_([s.security_id for s in listed]))
+        .order_by(sym.security_id, sym.valid_from, sym.symbol)
+    ).all()
+    for sid, symbol in rows:
+        symbols.setdefault(int(sid), []).append(str(symbol))
+    return build_alias_list(listed, as_of, brands, symbols)
 
 
 def feed_health(conn: Conn) -> list[FeedHealth]:
@@ -430,3 +462,180 @@ def halt_references(conn: Conn, run_id: Any, trigger: str) -> list[HaltReference
     c = t.halt_references.c
     rows = _reference_rows(conn, t.halt_references, c.run_id == run_id, c.trigger == trigger)
     return sorted((HaltReference.model_validate(r) for r in rows), key=lambda x: x.symbol_ref)
+
+
+# --- corporate actions + delistings (P6.4) ------------------------------------------------------
+# Headline readers see ``prospective`` rows only. Backfill evidence is reachable solely through
+# ``store.as_of_sensitivity`` (sensitivity/debug), which production decision and scoring code may
+# not import (import-linter).
+
+_PROSPECTIVE = (KnowledgeBasis.PROSPECTIVE.value,)
+
+
+def security_symbols(conn: Conn, security_id: int, as_of: datetime) -> list[SecuritySymbol]:
+    """Symbol history knowable at ``as_of``, oldest ``valid_from`` first."""
+    _check_ts(as_of)
+    c = t.security_symbols.c
+    stmt = (
+        select(t.security_symbols)
+        .where(c.security_id == security_id, c.available_at <= as_of)
+        .order_by(c.valid_from, c.available_at, c.symbol)
+    )
+    return [_model(SecuritySymbol, r._mapping) for r in conn.execute(stmt)]
+
+
+def symbol_history(conn: Conn, as_of: datetime) -> list[SecuritySymbol]:
+    """Every security's symbol history knowable at ``as_of`` (dated identity resolution)."""
+    _check_ts(as_of)
+    c = t.security_symbols.c
+    stmt = (
+        select(t.security_symbols)
+        .where(c.available_at <= as_of)
+        .order_by(c.security_id, c.valid_from, c.symbol)
+    )
+    return [_model(SecuritySymbol, r._mapping) for r in conn.execute(stmt)]
+
+
+def identity_conflicts(conn: Conn, as_of: datetime) -> list[IdentityConflict]:
+    _check_ts(as_of)
+    c = t.identity_conflicts.c
+    stmt = select(t.identity_conflicts).where(c.detected_at <= as_of).order_by(c.detected_at)
+    return [_model(IdentityConflict, r._mapping) for r in conn.execute(stmt)]
+
+
+def security_cik(conn: Conn, security_id: int) -> tuple[int | None, int]:
+    """The security's CIK and how many securities share it (Form 25 is filed per issuer)."""
+    c = t.securities.c
+    cik: int | None = conn.execute(select(c.cik).where(c.security_id == security_id)).scalar_one()
+    if cik is None:
+        return None, 0
+    n = conn.execute(select(func.count()).where(c.cik == cik)).scalar_one()
+    return int(cik), int(n)
+
+
+def _corporate_actions(
+    conn: Conn,
+    security_ids: Iterable[int],
+    as_of: datetime,
+    bases: Sequence[str],
+    process_from: date | None,
+    process_to: date | None,
+) -> list[CorporateAction]:
+    c = t.corporate_actions.c
+    where: list[ColumnElement[bool]] = [
+        c.security_id.in_(list(security_ids)),
+        c.knowledge_basis.in_(list(bases)),
+    ]
+    if process_from is not None:
+        where.append(c.process_date >= process_from)
+    if process_to is not None:
+        where.append(c.process_date <= process_to)
+    rows = _latest(conn, t.corporate_actions, [c.provider, c.provider_action_id], as_of, *where)
+    out = [CorporateAction.model_validate(r) for r in rows if not r["withdrawn"]]
+    return sorted(out, key=lambda a: (a.process_date, a.provider_action_id))
+
+
+def corporate_actions(
+    conn: Conn,
+    security_ids: Iterable[int],
+    as_of: datetime,
+    *,
+    process_from: date | None = None,
+    process_to: date | None = None,
+) -> list[CorporateAction]:
+    """Live prospective actions knowable at ``as_of``: per provider id the latest version first
+    observed at or before ``as_of``; an action whose latest version is a withdrawal is omitted."""
+    return _corporate_actions(conn, security_ids, as_of, _PROSPECTIVE, process_from, process_to)
+
+
+def _action_coverage(
+    conn: Conn, security_id: int, as_of: datetime, bases: Sequence[str]
+) -> list[CorporateActionCoverage]:
+    _check_ts(as_of)
+    c = t.corporate_action_coverage.c
+    stmt = (
+        select(t.corporate_action_coverage)
+        .where(
+            c.security_id == security_id,
+            c.established_at <= as_of,
+            c.knowledge_basis.in_(list(bases)),
+        )
+        .order_by(c.range_start, c.established_at)
+    )
+    return [_model(CorporateActionCoverage, r._mapping) for r in conn.execute(stmt)]
+
+
+def action_coverage(conn: Conn, security_id: int, as_of: datetime) -> list[CorporateActionCoverage]:
+    """Prospective coverage rows established at or before ``as_of`` (``process_date`` ranges)."""
+    return _action_coverage(conn, security_id, as_of, _PROSPECTIVE)
+
+
+def asset_status(conn: Conn, security_id: int, as_of: datetime) -> list[AssetStatusObservation]:
+    _check_ts(as_of)
+    c = t.asset_status_observations.c
+    stmt = (
+        select(t.asset_status_observations)
+        .where(c.security_id == security_id, c.observed_at <= as_of)
+        .order_by(c.observed_at)
+    )
+    return [_model(AssetStatusObservation, r._mapping) for r in conn.execute(stmt)]
+
+
+def delisting_filings(conn: Conn, cik: int, as_of: datetime) -> list[DelistingFiling]:
+    _check_ts(as_of)
+    c = t.delisting_filings.c
+    stmt = (
+        select(t.delisting_filings)
+        .where(c.cik == cik, c.available_at <= as_of)
+        .order_by(c.filing_date, c.accession)
+    )
+    return [_model(DelistingFiling, r._mapping) for r in conn.execute(stmt)]
+
+
+def bar_dates(conn: Conn, security_id: int, as_of: datetime) -> list[date]:
+    """Eastern session dates of every bar knowable at ``as_of`` (any feed), ascending."""
+    _check_ts(as_of)
+    c = t.price_bars.c
+    stmt = (
+        select(c.event_time)
+        .where(c.security_id == security_id, c.available_at <= as_of)
+        .distinct()
+        .order_by(c.event_time)
+    )
+    et = ZoneInfo("America/New_York")
+    stamps: list[datetime] = list(conn.execute(stmt).scalars())
+    return sorted({ts.astimezone(et).date() for ts in stamps})
+
+
+def _delisting_history(
+    conn: Conn, security_id: int, as_of: datetime, bases: Sequence[str]
+) -> list[Delisting]:
+    _check_ts(as_of)
+    c = t.delistings.c
+    stmt = (
+        select(t.delistings)
+        .where(
+            c.security_id == security_id,
+            c.available_at <= as_of,
+            c.knowledge_basis.in_(list(bases)),
+        )
+        .order_by(c.available_at)
+    )
+    rows = []
+    for r in conn.execute(stmt):
+        d = {k: v for k, v in dict(r._mapping).items() if k != "ingested_at"}
+        d["evidence"] = tuple(d["evidence"])
+        rows.append(Delisting.model_validate(d))
+    return rows
+
+
+def delisting(conn: Conn, security_id: int, as_of: datetime) -> Delisting | None:
+    """The latest prospective listing conclusion derived at or before ``as_of``."""
+    hist = delisting_history(conn, security_id, as_of)
+    return hist[-1] if hist else None
+
+
+def delisting_history(conn: Conn, security_id: int, as_of: datetime) -> list[Delisting]:
+    """Every prospective conclusion knowable at ``as_of``, oldest first (superseded defaults
+    stay visible)."""
+    return _delisting_history(conn, security_id, as_of, _PROSPECTIVE)

@@ -29,6 +29,17 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import insert
 
 from contracts.commitment import CommitmentIntegrityError, CommitmentMaterial
+from contracts.corporate_actions import (
+    WITHDRAWN,
+    AssetStatusObservation,
+    CorporateAction,
+    CorporateActionCoverage,
+    Delisting,
+    DelistingFiling,
+    IdentityConflict,
+    SecuritySymbol,
+    actions_sha256,
+)
 from contracts.data import (
     FeatureRow,
     FundamentalFact,
@@ -42,9 +53,11 @@ from contracts.enums import (
     TERMINAL_ORDER_STATUSES,
     AgentName,
     FeedName,
+    KnowledgeBasis,
     RunMode,
     RunStatus,
     SecurityKind,
+    SymbolSource,
     halt_reason,
 )
 from contracts.errors import (
@@ -93,7 +106,7 @@ def _row(model: BaseModel, table: Table) -> dict[str, Any]:
         if isinstance(v, Enum):
             v = v.value
         elif isinstance(v, tuple):
-            v = list(v)
+            v = [x.value if isinstance(x, Enum) else x for x in v]
         out[k] = v
     return out
 
@@ -164,20 +177,69 @@ def ensure_security(
     name: str,
     sector: str | None = None,
     industry: str | None = None,
+    at: datetime | None = None,
 ) -> int:
-    """Create or refresh a security (reference data, not a fact) and return its id."""
-    stmt = insert(t.securities).values(
-        ticker=ticker, cik=cik, name=name, sector=sector, industry=industry
+    """Create or refresh an equity (reference data, not a fact) and return its id.
+
+    Identity never follows the ticker alone and never the CIK alone (one issuer can list several
+    classes). A security of this CIK whose *current* ticker is ``ticker`` is refreshed; otherwise a
+    new security is created. Continuity across a rename comes only from an explicit name-change
+    action (`apply_name_change`), never from matching a retired symbol, so a new class or an
+    unrelated issuer that reuses a retired ticker stays a distinct security.
+
+    The new security's ``seed`` symbol row starts at the beginning of time, unless another security
+    ever held the ticker: then it starts on the creation date (``at``), so dated attribution never
+    gives the new security the earlier holder's history.
+    """
+    at = at or datetime.now(UTC)
+    c = t.securities.c
+    current = conn.execute(
+        select(c.security_id).where(
+            c.cik == cik, c.ticker == ticker, c.kind == SecurityKind.EQUITY.value
+        )
+    ).scalar_one_or_none()
+    if current is not None:
+        conn.execute(
+            t.securities.update()
+            .where(c.security_id == current)
+            .values(name=name, sector=sector, industry=industry)
+        )
+        return int(current)
+    sym = t.security_symbols.c
+    reused = conn.execute(select(sym.security_id).where(sym.symbol == ticker).limit(1)).first()
+    sid: int = int(
+        conn.execute(
+            insert(t.securities)
+            .values(ticker=ticker, cik=cik, name=name, sector=sector, industry=industry)
+            .returning(c.security_id)
+        ).scalar_one()
     )
-    upsert = stmt.on_conflict_do_update(
-        constraint="uq_securities_cik_ticker",
-        set_={
-            "name": stmt.excluded.name,
-            "sector": stmt.excluded.sector,
-            "industry": stmt.excluded.industry,
-        },
-    ).returning(t.securities.c.security_id)
-    return int(conn.execute(upsert).scalar_one())
+    start = at.astimezone(UTC).date() if reused is not None else date(1, 1, 1)
+    _seed_symbol(conn, sid, ticker, at, valid_from=start)
+    return sid
+
+
+def _seed_symbol(
+    conn: Connection,
+    sid: int,
+    ticker: str,
+    at: datetime | None,
+    *,
+    valid_from: date = date(1, 1, 1),
+) -> None:
+    insert_security_symbols(
+        conn,
+        [
+            SecuritySymbol(
+                security_id=sid,
+                symbol=ticker,
+                valid_from=valid_from,
+                source=SymbolSource.SEED,
+                source_ref="ensure_security",
+                available_at=at or datetime.now(UTC),
+            )
+        ],
+    )
 
 
 def ensure_reference_instrument(
@@ -192,7 +254,15 @@ def ensure_reference_instrument(
         index_where=t.securities.c.kind != SecurityKind.EQUITY.value,
         set_={"name": stmt.excluded.name},
     ).returning(t.securities.c.security_id)
-    return int(conn.execute(upsert).scalar_one())
+    sid: int = int(conn.execute(upsert).scalar_one())
+    sym = t.security_symbols.c
+    if conn.execute(select(sym.security_id).where(sym.security_id == sid).limit(1)).first() is None:
+        reused = conn.execute(select(sym.security_id).where(sym.symbol == ticker).limit(1)).first()
+        now = datetime.now(UTC)
+        _seed_symbol(
+            conn, sid, ticker, now, valid_from=now.date() if reused is not None else date(1, 1, 1)
+        )
+    return sid
 
 
 def set_listing(
@@ -969,3 +1039,217 @@ def insert_halt_symbol_set(conn: Connection, row: HaltSymbolSet) -> int:
 
 def insert_halt_references(conn: Connection, rows: Sequence[HaltReference]) -> int:
     return _insert_immutable(conn, t.halt_references, rows, ("run_id", "trigger", "symbol_ref"))
+
+
+# --- corporate actions + delistings (P6.4): immutable, conflict-checked writers -----------------
+
+
+def insert_security_symbols(conn: Connection, rows: Sequence[SecuritySymbol]) -> int:
+    return _insert_immutable(
+        conn, t.security_symbols, rows, ("security_id", "symbol", "valid_from")
+    )
+
+
+def apply_name_change(conn: Connection, row: SecuritySymbol) -> IdentityConflict | None:
+    """Record that ``row.security_id`` trades as ``row.symbol`` from ``row.valid_from``.
+
+    The same ``security_id`` continues (identity never follows the ticker) and
+    ``securities.ticker`` (the current-ticker convenience column) moves once the change is
+    effective. If another security already holds the new ticker (e.g. the SEC seed list created it
+    before the provider's name change arrived), nothing about either security changes: an
+    `IdentityConflict` is recorded (insert-only evidence for owner reconciliation) and returned.
+    Callers apply this after the action and its coverage are committed, so a conflict never rolls
+    them back.
+    """
+    if row.source is not SymbolSource.NAME_CHANGE:
+        raise ValueError("apply_name_change records name-change continuity only")
+    c = t.securities.c
+    sym = t.security_symbols.c
+    holder = conn.execute(
+        select(c.security_id).where(c.ticker == row.symbol, c.security_id != row.security_id)
+    ).scalar_one_or_none()
+    if holder is None:
+        holder = conn.execute(
+            select(sym.security_id)
+            .where(
+                sym.symbol == row.symbol,
+                sym.security_id != row.security_id,
+                sym.valid_from >= row.valid_from,
+            )
+            .limit(1)
+        ).scalar_one_or_none()
+    if holder is not None:
+        conflict = IdentityConflict(
+            security_id=row.security_id,
+            symbol=row.symbol,
+            valid_from=row.valid_from,
+            source_ref=row.source_ref,
+            holder_security_id=int(holder),
+            detected_at=row.available_at,
+        )
+        _insert_immutable(
+            conn,
+            t.identity_conflicts,
+            [conflict],
+            ("security_id", "symbol", "valid_from", "source_ref"),
+        )
+        return conflict
+    with conn.begin_nested():
+        insert_security_symbols(conn, [row])
+        latest: str = conn.execute(
+            select(sym.symbol)
+            .where(
+                sym.security_id == row.security_id,
+                sym.valid_from <= row.available_at.astimezone(UTC).date(),
+            )
+            .order_by(sym.valid_from.desc(), sym.available_at.desc())
+            .limit(1)
+        ).scalar_one()
+        conn.execute(
+            t.securities.update().where(c.security_id == row.security_id).values(ticker=latest)
+        )
+    return None
+
+
+def _latest_action_rows(
+    conn: Connection, basis: KnowledgeBasis, *where: Any
+) -> dict[str, dict[str, Any]]:
+    """Latest stored row per provider action id (any time), within one knowledge basis."""
+    c = t.corporate_actions.c
+    rows = conn.execute(
+        select(t.corporate_actions)
+        .where(c.knowledge_basis == basis.value, *where)
+        .order_by(c.provider_action_id, c.available_at.desc())
+    ).mappings()
+    out: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        out.setdefault(r["provider_action_id"], dict(r))
+    return out
+
+
+def record_action_query(
+    conn: Connection,
+    *,
+    coverages: Sequence[CorporateActionCoverage],
+    observed: Sequence[CorporateAction],
+) -> int:
+    """Persist one complete action query: observed versions, withdrawals and coverage, atomically.
+
+    Called only after every page of the query succeeded. Per security in ``coverages``:
+
+    * an observed action is written (``available_at`` = ``established_at``) unless the latest
+      stored row of the same knowledge basis already carries that exact version;
+    * an action whose latest row is live, lies in the covered ``process_date`` range and was not
+      returned now gets an explicit ``withdrawn`` row (never a deletion);
+    * the coverage row vouches for exactly the observed ``(id, version)`` set.
+    """
+    if not coverages:
+        raise ValueError("a query without coverage writes nothing")
+    stamp = {(cv.established_at, cv.knowledge_basis) for cv in coverages}
+    if len(stamp) != 1:
+        raise ValueError("one query has one established_at and one knowledge basis")
+    ((established, basis),) = stamp
+    by_sid: dict[int, list[CorporateAction]] = {}
+    for a in observed:
+        if a.withdrawn or a.available_at != established or a.knowledge_basis is not basis:
+            raise ValueError("observed actions share their query's time and basis and are live")
+        by_sid.setdefault(a.security_id, []).append(a)
+    covered = {cv.security_id: cv for cv in coverages}
+    if len(covered) != len(coverages):
+        raise ValueError("one coverage row per security per query")
+    for sid in by_sid:
+        if sid not in covered:
+            raise ValueError(f"action for security {sid} outside the query's coverage")
+    for sid, cv in covered.items():
+        mine = by_sid.get(sid, [])
+        pairs = [(a.provider_action_id, a.source_version) for a in mine]
+        if cv.action_count != len(mine) or cv.actions_sha256 != actions_sha256(pairs):
+            raise ValueError(f"coverage for security {sid} does not describe its actions")
+        for a in mine:
+            if not cv.range_start <= a.process_date <= cv.range_end:
+                raise ValueError(f"action {a.provider_action_id} outside the covered range")
+
+    c = t.corporate_actions.c
+    written = 0
+    with conn.begin_nested():
+        for sid, cv in covered.items():
+            live = {a.provider_action_id: a for a in by_sid.get(sid, [])}
+            latest = _latest_action_rows(
+                conn,
+                basis,
+                c.security_id == sid,
+                c.available_at <= established,
+            )
+            fresh = [
+                a
+                for aid, a in live.items()
+                if aid not in latest
+                or latest[aid]["withdrawn"]
+                or latest[aid]["source_version"] != a.source_version
+            ]
+            # A withdrawal needs a comparable query: same security (dated attribution), same
+            # basis, the prior process date inside this range, and the prior action's own symbol
+            # explicitly inside this query's symbol scope. All types and complete quality are
+            # guaranteed by the coverage contract.
+            gone = [
+                _withdrawal(row, cv)
+                for aid, row in latest.items()
+                if aid not in live
+                and not row["withdrawn"]
+                and cv.range_start <= row["process_date"] <= cv.range_end
+                and row["subject_symbol"] in cv.symbols
+            ]
+            written += _insert_immutable(
+                conn,
+                t.corporate_actions,
+                [*fresh, *gone],
+                ("provider", "provider_action_id", "available_at"),
+            )
+        _insert_immutable(
+            conn,
+            t.corporate_action_coverage,
+            coverages,
+            ("provider", "security_id", "range_start", "range_end", "established_at"),
+        )
+    return written
+
+
+def _withdrawal(row: Mapping[str, Any], cv: CorporateActionCoverage) -> CorporateAction:
+    data = {k: v for k, v in row.items() if k != "ingested_at"}
+    data.update(
+        withdrawn=True,
+        source_version=f"{WITHDRAWN}:{cv.source_version}"[:128],
+        available_at=cv.established_at,
+        knowledge_basis=cv.knowledge_basis,
+    )
+    return CorporateAction.model_validate(data)
+
+
+def insert_asset_status(conn: Connection, rows: Sequence[AssetStatusObservation]) -> int:
+    return _insert_immutable(
+        conn, t.asset_status_observations, rows, ("security_id", "observed_at")
+    )
+
+
+def insert_delisting_filings(conn: Connection, rows: Sequence[DelistingFiling]) -> int:
+    return _insert_immutable(conn, t.delisting_filings, rows, ("cik", "accession"))
+
+
+def record_delisting(conn: Connection, row: Delisting) -> int:
+    """Append a derived conclusion unless the latest one (same basis) is already identical.
+
+    A changed conclusion (e.g. consideration that supersedes an earlier default) is a new row;
+    the earlier row stays for audit and sensitivity reporting.
+    """
+    c = t.delistings.c
+    latest = conn.execute(
+        select(c.source_version, c.available_at)
+        .where(c.security_id == row.security_id, c.knowledge_basis == row.knowledge_basis.value)
+        .order_by(c.available_at.desc())
+        .limit(1)
+    ).first()
+    if latest is not None and latest.source_version == row.source_version:
+        return 0
+    if latest is not None and latest.available_at >= row.available_at:
+        raise ValueError("a delisting derivation cannot precede the latest stored one")
+    return _insert_immutable(conn, t.delistings, [row], ("security_id", "available_at"))

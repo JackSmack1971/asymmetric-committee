@@ -13,7 +13,9 @@ FACT_AND_REF_TABLES = (
     "price_bars, fundamentals_asfiled, insider_txns, news_items, features, universe_snapshots, "
     "feed_health, securities, trading_calendar, calendar_coverage, tbill_rates, "
     "tbill_vintage_coverage, execution_references, halt_reference_requests, "
-    "halt_reference_symbol_sets, halt_references"
+    "halt_reference_symbol_sets, halt_references, security_symbols, corporate_actions, "
+    "corporate_action_coverage, asset_status_observations, delisting_filings, identity_conflicts, "
+    "delistings"
 )
 
 

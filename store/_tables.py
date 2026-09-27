@@ -582,6 +582,148 @@ halt_references = Table(
     ),
 )
 
+# --- corporate actions + delistings (P6.4) ------------------------------------------------------
+# All insert-only. ``available_at`` is our first observation of a version, never a provider date.
+
+security_symbols = Table(
+    "security_symbols",
+    metadata,
+    Column("security_id", Integer, ForeignKey("securities.security_id"), primary_key=True),
+    Column("symbol", Text, primary_key=True),
+    Column("valid_from", Date, primary_key=True),
+    Column("source", Text, nullable=False),
+    Column("source_ref", Text, nullable=False),
+    _ts("available_at"),
+    Column("ingested_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Index("ix_security_symbols_symbol", "symbol"),
+)
+
+corporate_actions = Table(
+    "corporate_actions",
+    metadata,
+    Column("provider", Text, primary_key=True),
+    Column("provider_action_id", Text, primary_key=True),
+    Column("available_at", DateTime(timezone=True), primary_key=True),
+    Column("source_version", Text, nullable=False),
+    Column("withdrawn", Boolean, nullable=False),
+    _sid(),
+    Column("subject_symbol", Text, nullable=False),
+    Column("action_type", Text, nullable=False),
+    Column("interpretation", Text, nullable=False),
+    Column("knowledge_basis", Text, nullable=False),
+    Column("process_date", Date, nullable=False),
+    Column("ex_date", Date),
+    Column("record_date", Date),
+    Column("payable_date", Date),
+    Column("effective_date", Date),
+    Column("old_rate", Double),
+    Column("new_rate", Double),
+    Column("cash_rate", Double),
+    Column("stock_rate", Double),
+    Column("acquirer_symbol", Text),
+    Column("acquirer_security_id", Integer, ForeignKey("securities.security_id"), nullable=True),
+    Column("new_symbol", Text),
+    Column("currency", Text),
+    Column("raw_payload", JSONB, nullable=False),
+    Column("ingested_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Index("ix_corporate_actions_security_process", "security_id", "process_date"),
+    Index("ix_corporate_actions_available_at", "available_at"),
+)
+
+corporate_action_coverage = Table(
+    "corporate_action_coverage",
+    metadata,
+    Column("provider", Text, primary_key=True),
+    Column("security_id", Integer, ForeignKey("securities.security_id"), primary_key=True),
+    Column("range_start", Date, primary_key=True),
+    Column("range_end", Date, primary_key=True),
+    Column("established_at", DateTime(timezone=True), primary_key=True),
+    Column("date_filter", Text, nullable=False),
+    Column("symbols", ARRAY(Text), nullable=False),
+    Column("action_types", ARRAY(Text), nullable=False),
+    Column("data_quality", Text, nullable=False),
+    Column("region", Text, nullable=False),
+    Column("page_count", Integer, nullable=False),
+    Column("action_count", Integer, nullable=False),
+    Column("actions_sha256", Text, nullable=False),
+    Column("knowledge_basis", Text, nullable=False),
+    Column("source_version", Text, nullable=False),
+    Column("ingested_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    CheckConstraint("data_quality = 'complete'", name="ck_action_coverage_complete"),
+    CheckConstraint("range_end >= range_start", name="ck_action_coverage_range"),
+)
+
+asset_status_observations = Table(
+    "asset_status_observations",
+    metadata,
+    Column("security_id", Integer, ForeignKey("securities.security_id"), primary_key=True),
+    Column("observed_at", DateTime(timezone=True), primary_key=True),
+    Column("symbol", Text, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("tradable", Boolean),
+    Column("source_version", Text, nullable=False),
+    Column("ingested_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+)
+
+delisting_filings = Table(
+    "delisting_filings",
+    metadata,
+    Column("cik", BigInteger, primary_key=True),
+    Column("accession", Text, primary_key=True),
+    Column("form", Text, nullable=False),
+    Column("filing_date", Date, nullable=False),
+    Column("earliest_effective_date", Date, nullable=False),
+    Column("rule_provision", Text),
+    Column("stated_effective_date", Date),
+    _ts("available_at"),
+    Column("ingested_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+)
+
+# A name change whose target ticker another security already holds (P6.4). Recorded, never merged:
+# neither security is mutated; an owner reconciles from this evidence.
+identity_conflicts = Table(
+    "identity_conflicts",
+    metadata,
+    Column("security_id", Integer, ForeignKey("securities.security_id"), primary_key=True),
+    Column("symbol", Text, primary_key=True),
+    Column("valid_from", Date, primary_key=True),
+    Column("source_ref", Text, primary_key=True),
+    Column("holder_security_id", Integer, ForeignKey("securities.security_id"), nullable=False),
+    _ts("detected_at"),
+    Column("ingested_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+)
+
+delistings = Table(
+    "delistings",
+    metadata,
+    Column("security_id", Integer, ForeignKey("securities.security_id"), primary_key=True),
+    Column("available_at", DateTime(timezone=True), primary_key=True),
+    Column("status", Text, nullable=False),
+    Column("reason", Text, nullable=False),
+    Column("last_trade_date", Date),
+    Column("terminal_return", Double),
+    Column("terminal_return_source", Text),
+    Column("cash_per_share", Double),
+    Column("acquirer_security_id", Integer, ForeignKey("securities.security_id"), nullable=True),
+    Column("acquirer_symbol", Text),
+    Column("acquirer_rate", Double),
+    Column("evidence", ARRAY(Text), nullable=False),
+    Column("knowledge_basis", Text, nullable=False),
+    Column("derivation_version", Text, nullable=False),
+    Column("source_version", Text, nullable=False),
+    Column("ingested_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    CheckConstraint(
+        "(status = 'delisted' AND terminal_return_source IS NOT NULL) "
+        "OR (status <> 'delisted' AND terminal_return_source IS NULL "
+        "AND terminal_return IS NULL)",
+        name="ck_delistings_source",
+    ),
+    CheckConstraint(
+        "terminal_return_source IS DISTINCT FROM 'default' OR terminal_return = -0.3",
+        name="ck_delistings_default",
+    ),
+)
+
 FACT_TABLES: tuple[Table, ...] = (
     price_bars,
     fundamentals_asfiled,
@@ -604,4 +746,11 @@ IMMUTABLE_TABLES: tuple[Table, ...] = (
     halt_reference_requests,
     halt_reference_symbol_sets,
     halt_references,
+    security_symbols,
+    corporate_actions,
+    corporate_action_coverage,
+    asset_status_observations,
+    delisting_filings,
+    identity_conflicts,
+    delistings,
 )
