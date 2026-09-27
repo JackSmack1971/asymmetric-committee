@@ -9,3 +9,6 @@ __pycache__/
 coverage.xml
 node_modules/
 .next/
+
+# Local Claude Code transcript review bundle
+.claude-session-review/

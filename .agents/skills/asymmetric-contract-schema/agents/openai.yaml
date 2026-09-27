@@ -1,0 +1,7 @@
+interface:
+  display_name: "Asymmetric Contract + Schema"
+  short_description: "Change shared contracts first and keep generated schemas fresh"
+  default_prompt: "Use $asymmetric-contract-schema to make this contract or serialized-shape change safely."
+
+policy:
+  allow_implicit_invocation: true

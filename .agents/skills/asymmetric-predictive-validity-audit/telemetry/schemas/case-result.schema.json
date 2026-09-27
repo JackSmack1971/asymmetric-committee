@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "APVA evaluation case result",
+  "type": "object",
+  "required": ["schema", "case_id", "suite", "condition", "repeat", "routing", "grade", "cost"],
+  "properties": {
+    "schema": {"const": "apva.eval.case-result.v1"},
+    "case_id": {"type": "string"},
+    "suite": {"enum": ["routing", "task", "recovery"]},
+    "condition": {"enum": ["skill", "baseline"]},
+    "repeat": {"type": "integer", "minimum": 1},
+    "expected_activation": {"type": ["boolean", "null"]},
+    "routing": {"type": "object"},
+    "native_otel": {"type": "object"},
+    "grade": {"type": "object"},
+    "cost": {"type": "object"}
+  },
+  "additionalProperties": true
+}

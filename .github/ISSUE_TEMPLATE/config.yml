@@ -1,0 +1,21 @@
+# Issue chooser configuration.
+# Docs: https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/configuring-issue-templates-for-your-repository
+
+# Require users to pick a template instead of opening a blank issue.
+blank_issues_enabled: false
+
+# Where to send conversations that do not fit the issue templates.
+contact_links:
+  - name: Questions & Community Support
+    url: https://github.com/JackSmack1971/asymmetric-committee/discussions
+    about: >
+      Ask questions and get help from the community here, not in issue tracker.
+  - name: Documentation
+    url: https://github.com/JackSmack1971/asymmetric-committee/wiki
+    about: >
+      Read the docs before filing an issue — the answer may already be there.
+  - name: Security Vulnerabilities
+    url: https://github.com/JackSmack1971/asymmetric-committee/security/policy
+    about: >
+      Please report security vulnerabilities through the private channel described
+      in SECURITY.md, never in a public issue.

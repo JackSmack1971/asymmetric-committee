@@ -19,18 +19,12 @@ fmt:
 	uv run ruff format .
 	uv run ruff check --fix .
 
-# Phase gates: each phase replaces its stub with the real acceptance check (§17).
-# P0: lint + contract/config tests + exported LLM schemas are current.
-gate-P0: lint
-	uv run pytest tests/contracts tests/config
-	uv run python -m contracts.schema_export --check
+# Compatibility aliases. scripts/verify_local.py owns phase mapping, services, env and results.
+gate-P0:
+	uv run python scripts/verify_local.py P0
 
-# P1: lint (incl. import-linter) + point-in-time property/restatement/Form 4 tests, EDGAR limiter
-# load test, parser tests, universe snapshots and the 5-ticker x 90-day backfill smoke replayed
-# from tests/fixtures/http. Needs Postgres + Redis (TEST_DATABASE_URL / TEST_REDIS_URL, or local
-# binaries); REQUIRE_SERVICES=1 makes a missing service fail instead of skip.
-gate-P1: lint
-	REQUIRE_SERVICES=1 uv run pytest tests/store tests/ingest tests/universe tests/config
+gate-P1:
+	uv run python scripts/verify_local.py P1
 
 migrate:
 	uv run python -m store.migrate
@@ -41,42 +35,35 @@ backfill-smoke:
 	    --tickers ALFA,BRVO,CHRL,DLTA,ECHO --universe tests/fixtures/universe_smoke.yaml \
 	    --replay tests/fixtures/http
 
-gate-P2: lint
-	uv run pytest tests/contracts tests/config tests/features tests/gate tests/risk tests/evaluation
-	uv run python -m contracts.schema_export --check
+gate-P2:
+	uv run python scripts/verify_local.py P2
 
 # P3: lint (incl. import-linter) + contracts/config/features/universe + agents (partitions, leak
 # tests, prompts, client, Redis bucket/cache/DLQ, runner) + exported LLM schemas are current.
 # Needs Redis (TEST_REDIS_URL or a local binary); REQUIRE_SERVICES=1 turns a skip into a failure.
-gate-P3: lint
-	REQUIRE_SERVICES=1 uv run pytest tests/contracts tests/config tests/features tests/universe tests/agents
-	uv run python -m contracts.schema_export --check
+gate-P3:
+	uv run python scripts/verify_local.py P3
 
 # P4: lint (ruff, mypy --strict, import-linter) + contracts/config/features/agents (incl. CIO) +
 # committee (pooling, stacker, e2e) + risk sizing + exported LLM schemas are current.
 # Agents tests need Redis (TEST_REDIS_URL or a local binary); REQUIRE_SERVICES=1 fails on a skip.
-gate-P4: lint
-	REQUIRE_SERVICES=1 uv run pytest tests/contracts tests/config tests/features tests/agents tests/committee tests/risk
-	uv run python -m contracts.schema_export --check
+gate-P4:
+	uv run python scripts/verify_local.py P4
 
 # P5: lint (ruff, mypy --strict, import-linter) + the whole suite, because P5 sits on P1-P4, with
 # Postgres and Redis *required* (REQUIRE_SERVICES=1: a missing service fails, never skips) +
 # schema freshness. The suite includes the anchoring, Celery, kill-switch, execution and end-to-end
 # tests; all of them use local stand-ins (respx, a MockTransport Alpaca, a bare git repo), so the
-# gate makes no external call and needs no credentials. TimescaleDB is required by default so the
-# hypertable test must actually run; on a plain-Postgres dev box say so explicitly with
-# `make gate-P5 TIMESCALE=0` and treat that run as not gating. Services: TEST_DATABASE_URL,
-# TEST_REDIS_URL (or local binaries).
-TIMESCALE ?= 1
-gate-P5: lint
-	REQUIRE_SERVICES=1 REQUIRE_TIMESCALE=$(TIMESCALE) uv run pytest tests
-	uv run python -m contracts.schema_export --check
+# gate makes no external call and needs no credentials. TimescaleDB is required so the hypertable
+# test must actually run. Services: TEST_DATABASE_URL, TEST_REDIS_URL (or local binaries).
+gate-P5:
+	uv run python scripts/verify_local.py P5
 
 gate-P6:
-	@echo "gate-P6: not implemented"; exit 1
+	uv run python scripts/verify_local.py P6
 
 gate-P7:
-	@echo "gate-P7: not implemented"; exit 1
+	uv run python scripts/verify_local.py P7
 
 gate-P8:
-	@echo "gate-P8: not implemented"; exit 1
+	uv run python scripts/verify_local.py P8

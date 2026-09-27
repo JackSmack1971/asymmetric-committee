@@ -1,14 +1,17 @@
-# CLAUDE.md — Asymmetric Committee Fund
+# AGENTS.md — Asymmetric Committee Fund
 
 The authoritative spec is `docs/asymmetric-committee-blueprint.md`. When code and spec disagree, the spec wins. If the spec is wrong or ambiguous, stop and propose a spec edit. Do not silently diverge.
 
 ## Current state
+
 Track phase status in `docs/PROGRESS.md` (phase, gate status, open issues, decisions). Read it at the start of every session and update it at the end.
 
 ## Stack
+
 Python 3.12, uv, Pydantic v2, FastAPI, Celery + Redis, TimescaleDB (Postgres 16), SQLAlchemy 2 core + Alembic, httpx, pytest + hypothesis, ruff + mypy --strict, Next.js 15 (dashboard only), Docker Compose.
 
 ## Invariants (never violate — each has a test)
+
 1. **Contracts:** every inter-stage message is a model in `contracts/`. Use `extra="forbid"` and Enums, never bare strings, for categorical fields. Do not define message shapes anywhere else.
 2. **Point-in-time reads:** agent, feature, gate, committee and risk code reads the DB **only** through `store/as_of.py`. No raw SQL against fact tables outside `store/`.
 3. **No look-ahead:** nothing with `available_at > as_of` may reach a feature, prompt or decision. Form 4 `available_at` = filing acceptance time. Fundamentals are stored as-filed and never overwritten.
@@ -19,6 +22,7 @@ Python 3.12, uv, Pydantic v2, FastAPI, Celery + Redis, TimescaleDB (Postgres 16)
 8. **Run-scoped idempotency:** task keys are `(run_id, stage, security_id)`. Only `COMPLETED` short-circuits.
 
 ## Working rules
+
 - Start each phase in plan mode. Write the plan to `docs/plans/P<n>.md` before coding.
 - Begin implementation only when the owner's entire response is exactly `APPROVED`, apart from surrounding whitespace. Corrections, qualifications, conditions, questions, or additional requests require an in-place plan revision and resubmission.
 - Revise plans in place; reconcile removed or renamed concepts throughout the full document and remove superseded text before resubmitting.
@@ -33,6 +37,7 @@ Python 3.12, uv, Pydantic v2, FastAPI, Celery + Redis, TimescaleDB (Postgres 16)
 - Done means `python scripts/verify_local.py P<n>` passes. Do not mark a phase done otherwise.
 
 ## Commands
+
 - `make up` / `make down` — compose stack
 - `make test` — full suite
 - `make lint` — ruff + mypy
