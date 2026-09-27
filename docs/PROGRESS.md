@@ -31,7 +31,7 @@ Read at the start of every session; update at the end. Spec: `docs/asymmetric-co
 - 2026-09-25 — P1: one version rule for every fact table: per natural key, max `(available_at, source_version)` among rows with `available_at <= as_of`. Inserts are `ON CONFLICT DO NOTHING`; `fundamentals_asfiled` and `decision_commitments` have insert-only triggers.
 - 2026-09-25 — P1: spec §4.3 edited: `fundamentals_asfiled` + `period_start`/`fiscal_period`/`form`, `news_items` + `summary`, `price_bars.ts` → `event_time`, new `feed_health`.
 - 2026-09-25 — P1: invariant 2 enforced by import-linter (`make lint`): agents/features/gate/committee/risk/evaluation/universe may not import `sqlalchemy`, `psycopg`, `store._tables`, `store.migrate`; decision code also not `store.write`/`store.db`/`ingest`. Ruff TID251 bans `store._tables` outside `store/`.
-- 2026-09-25 — P1: EDGAR limiter = Redis sliding-window log, 8 per 1.05 s (5% jitter margin), shared by all workers. Live EDGAR requires `REDIS_URL`; the in-process limiter is only for replay.
+- 2026-09-25 — P1: EDGAR limiter = Redis sliding-window log, 8 per 1.25 s (25% jitter margin; raised from 1.05 s after CI arrivals bunched to 11 in 1 s), shared by all workers. Live EDGAR requires `REDIS_URL`; the in-process limiter is only for replay.
 - 2026-09-25 — P1: bars are unadjusted (`adjustment=raw`); split-adjusting history is look-ahead. P2 features must handle splits point-in-time.
 - 2026-09-25 — P1: EDGAR `acceptanceDateTime` is read as Eastern despite its `Z`; Alpha Vantage `time_published` read as Eastern. Both are the later reading, so never look-ahead.
 - 2026-09-25 — P1: universe ranks by log(ADV20) (SPEC-GAP: §4.4 "liquidity-adjusted score" undefined). Snapshots store every in-sector candidate with a reason.

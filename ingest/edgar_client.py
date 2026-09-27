@@ -2,7 +2,7 @@
 
 The SEC allows 10 requests/s per user across all machines and blocks offenders for ~10 minutes.
 We stay at 8: a Redis sliding-window log (atomic Lua, Redis clock) admits at most ``limit``
-requests per ``window_s`` for every process sharing the key. The default window has a 5% margin so
+requests per ``window_s`` for every process sharing the key. The default window has a 25% margin so
 network jitter between admission and arrival cannot push a server-side 1 s window over 8.
 """
 
@@ -20,7 +20,7 @@ import httpx
 import redis
 
 EDGAR_LIMIT = 8
-EDGAR_WINDOW_S = 1.05
+EDGAR_WINDOW_S = 1.25
 LIMITER_KEY = "ratelimit:sec_edgar"
 
 _SLIDING_WINDOW = """
