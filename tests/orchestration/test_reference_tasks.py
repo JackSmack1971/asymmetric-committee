@@ -145,3 +145,73 @@ def test_no_execution_module_touches_the_reference_tables_or_a_task_queue() -> N
         src: Any = path.read_text(encoding="utf-8")
         assert "celery" not in src.lower(), path
         assert "record_halt_references" not in src and "halt_reference_requests" not in src, path
+
+
+# --- P6.4 corporate actions, listing status, delistings -------------------------------------------
+
+
+class CorpJobs:
+    def __init__(self, errors: list[str] | None = None) -> None:
+        self.errors = errors or []
+        self.calls: list[str] = []
+
+    def _do(self, name: str) -> Any:
+        from ingest.corporate_actions import JobResult
+
+        self.calls.append(name)
+        return JobResult(written=3, errors=list(self.errors))
+
+    def run_corporate_actions(self, now: datetime) -> Any:
+        return self._do("actions")
+
+    def run_listing_status(self, now: datetime) -> Any:
+        return self._do("status")
+
+    def run_delistings(self, now: datetime) -> Any:
+        return self._do("delistings")
+
+
+def test_corporate_action_jobs_are_reference_polls_not_sla_feeds() -> None:
+    from contracts.enums import FeedName, ReferenceJob
+
+    pipeline = load_config(allow_placeholders=True, env={}).pipeline
+    p64 = {ReferenceJob.CORPORATE_ACTIONS, ReferenceJob.LISTING_STATUS, ReferenceJob.DELISTINGS}
+    assert p64 <= set(pipeline.reference_data.cadence_minutes)
+    assert not {j.value for j in p64} & {f.value for f in FeedName}
+    assert not {j.value for j in p64} & {f.value for f in pipeline.freshness_sla_hours}
+    # They never ran, yet the kill switch stays quiet.
+    fresh = {feed: NOW - timedelta(minutes=5) for feed in pipeline.freshness_sla_hours}
+    assert (
+        evaluate(
+            equity=100.0,
+            prior_close_equity=100.0,
+            limit=0.03,
+            last_success=fresh,
+            sla_hours=pipeline.freshness_sla_hours,
+            now=NOW,
+        )
+        is None
+    )
+
+
+def test_a_failed_corporate_action_unit_waits_for_the_next_cadence() -> None:
+    rt, *_ = make_runtime(now=NOW)
+    jobs = CorpJobs(errors=["[1]: CorporateActionsError('HTTP 401')"])
+    rt.corporate_actions = jobs
+    tasks.set_runtime(rt)
+    try:
+        result = tasks.sync_corporate_actions_task.apply()
+    finally:
+        tasks.set_runtime(None)
+    assert isinstance(result.result, RuntimeError)
+    assert "sync_corporate_actions: 1 failure(s)" in str(result.result)
+    assert jobs.calls == ["actions"]  # exactly one attempt: no retry storm
+    assert not tasks.is_transient(tasks.ReferenceJobFailedError("job", ["x"]))
+
+
+def test_corporate_action_tasks_report_what_they_wrote() -> None:
+    rt, *_ = make_runtime(now=NOW)
+    rt.corporate_actions = CorpJobs()
+    assert tasks.sync_corporate_actions(rt) == {"written": 3}
+    assert tasks.poll_listing_status(rt) == {"written": 3}
+    assert tasks.derive_delistings(rt) == {"written": 3}

@@ -538,6 +538,9 @@ def test_beat_is_scheduled_from_the_trading_calendar_not_fixed_dates() -> None:
         "orchestration.sync_dgs3mo",
         "orchestration.capture_due_references",
         "orchestration.sweep_halt_references",
+        "orchestration.sync_corporate_actions",
+        "orchestration.poll_listing_status",
+        "orchestration.derive_delistings",
     }
     # P6.3 reference jobs are interval polls, never a fixed weekday/clock cron (D0 comes from the
     # stored calendar), and nothing dispatches from the halt path.
