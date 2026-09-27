@@ -13,6 +13,7 @@ from celery import Celery
 from celery.schedules import crontab
 
 from config.loader import load_config
+from contracts.enums import ReferenceJob
 
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 
@@ -67,4 +68,28 @@ def ingest_schedule() -> dict[str, dict[str, Any]]:
     }
 
 
+_REFERENCE_TASKS = {
+    ReferenceJob.CALENDAR: "orchestration.sync_calendar",
+    ReferenceJob.BENCHMARKS: "orchestration.ingest_benchmarks",
+    ReferenceJob.DGS3MO: "orchestration.sync_dgs3mo",
+    ReferenceJob.REFERENCES: "orchestration.capture_due_references",
+    ReferenceJob.HALT_SWEEP: "orchestration.sweep_halt_references",
+}
+
+
+def reference_schedule() -> dict[str, dict[str, Any]]:
+    """P6.3 acquisition jobs at their ``reference_data.cadence_minutes``. They are polls, not
+    clock-time crons: the reference poll fires when a run's D0 open + delay is due per the stored
+    calendar. They are not SLA feeds and cannot trigger a stale-feed halt."""
+    cadence = load_config(allow_placeholders=True, env={}).pipeline.reference_data.cadence_minutes
+    return {
+        f"reference-{job.value}": {
+            "task": _REFERENCE_TASKS[job],
+            "schedule": timedelta(minutes=minutes),
+        }
+        for job, minutes in cadence.items()
+    }
+
+
 app.conf.beat_schedule.update(ingest_schedule())
+app.conf.beat_schedule.update(reference_schedule())

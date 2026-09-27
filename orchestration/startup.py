@@ -68,6 +68,7 @@ def check_environment(
     if live:
         need("ALPACA_API_KEY_ID", "paper trading")
         need("ALPACA_API_SECRET", "paper trading")
+        need("FRED_API_KEY", "DGS3MO vintages (ALFRED)")
     try:
         paper_base_url(dict(env))  # any non-paper Alpaca URL in the environment fails closed
     except LiveTradingError as exc:

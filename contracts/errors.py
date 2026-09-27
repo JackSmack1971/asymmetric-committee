@@ -13,3 +13,7 @@ class ResetRefusedError(RuntimeError):
 
 class AnchorIncompleteError(ValueError):
     """ANCHORED needs both the OpenTimestamps proof and the public git commit."""
+
+
+class ImmutableConflictError(RuntimeError):
+    """An insert-only row was presented again with a different payload under one natural key."""

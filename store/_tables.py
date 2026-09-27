@@ -11,6 +11,7 @@ from typing import Any
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Column,
     Date,
     DateTime,
@@ -25,6 +26,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 
@@ -45,6 +47,15 @@ def _bitemporal() -> list[Column[Any]]:
     ]
 
 
+def _bitemporal_no_version() -> list[Column[Any]]:
+    """§4.2 columns for a table whose ``source_version`` is part of its primary key."""
+    return [
+        _ts("event_time"),
+        _ts("available_at"),
+        Column("ingested_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    ]
+
+
 def _sid(*, nullable: bool = False) -> Column[Any]:
     return Column("security_id", Integer, ForeignKey("securities.security_id"), nullable=nullable)
 
@@ -56,13 +67,25 @@ securities = Table(
     metadata,
     Column("security_id", Integer, primary_key=True, autoincrement=True),
     Column("ticker", Text, nullable=False),
-    Column("cik", BigInteger, nullable=False),
+    Column("cik", BigInteger, nullable=True),
     Column("name", Text, nullable=False),
     Column("sector", Text),
     Column("industry", Text),
     Column("listed_from", Date),
     Column("listed_to", Date),
+    Column("kind", Text, nullable=False, server_default="equity"),
     UniqueConstraint("cik", "ticker", name="uq_securities_cik_ticker"),
+    # An equity has a real CIK; SPY and the sector ETFs have none (no synthetic identifier, §4.3).
+    CheckConstraint(
+        "(kind = 'equity' AND cik IS NOT NULL) OR (kind = 'etf' AND cik IS NULL)",
+        name="ck_securities_kind_cik",
+    ),
+    Index(
+        "uq_securities_reference_ticker",
+        "ticker",
+        unique=True,
+        postgresql_where=text("kind <> 'equity'"),
+    ),
 )
 
 # --- fact tables (bitemporal) ----------------------------------------------------------------
@@ -416,6 +439,149 @@ agent_scores = Table(
     UniqueConstraint("agent", "model_served", "window", "computed_at", name="uq_agent_scores"),
 )
 
+# --- market-data foundations (P6.3) ------------------------------------------------------------
+
+# Append-only calendar revisions. ``event_time`` is the session open; a revision is a new row.
+trading_calendar = Table(
+    "trading_calendar",
+    metadata,
+    Column("session_date", Date, primary_key=True),
+    Column("source_version", Text, primary_key=True),
+    _ts("open_at"),
+    _ts("close_at"),
+    *_bitemporal_no_version(),
+    Index("ix_trading_calendar_available_at", "available_at"),
+)
+
+# A fetched range whose sessions were written in the same transaction (see contracts.market_data).
+calendar_coverage = Table(
+    "calendar_coverage",
+    metadata,
+    Column("source", Text, primary_key=True),
+    Column("range_start", Date, primary_key=True),
+    Column("range_end", Date, primary_key=True),
+    Column("source_version", Text, primary_key=True),
+    _ts("available_at"),
+    Column("ingested_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("session_count", Integer, nullable=False),
+    Column("sessions_sha256", Text, nullable=False),
+    Index("ix_calendar_coverage_available_at", "available_at"),
+)
+
+# DGS3MO vintages. NAMED EXCEPTION to the available_at rule: ``vintage_date`` (ALFRED
+# realtime_start) is date-granular evidence; no timestamp is invented (§4.3).
+tbill_rates = Table(
+    "tbill_rates",
+    metadata,
+    Column("series", Text, primary_key=True),
+    Column("observation_date", Date, primary_key=True),
+    Column("vintage_date", Date, primary_key=True),
+    Column("yield_pct", Double, nullable=False),
+    Column("ingested_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("source_version", Text, nullable=False),
+)
+
+tbill_vintage_coverage = Table(
+    "tbill_vintage_coverage",
+    metadata,
+    Column("series", Text, primary_key=True),
+    Column("source_version", Text, primary_key=True),
+    _ts("established_at"),
+    Column("earliest_vintage", Date, nullable=False),
+    Column("latest_vintage", Date, nullable=False),
+    Column("vintage_count", Integer, nullable=False),
+    Column("vintage_dates_sha256", Text, nullable=False),
+    Column("ingested_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+)
+
+# Run-scoped, insert-only reference evidence for scoring (§4.6). A resolved row carries a price and
+# its source; an unresolved row carries a reason. No daily price can appear here.
+execution_references = Table(
+    "execution_references",
+    metadata,
+    Column("run_id", UUID(as_uuid=True), ForeignKey("runs.run_id"), primary_key=True),
+    Column("symbol_ref", Text, primary_key=True),
+    _ts("ref_time", nullable=True),
+    Column("mode", Text, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("reason", Text),
+    Column("price", Double),
+    Column("source", Text),
+    _ts("trade_time", nullable=True),
+    Column("trade_tape", Text),
+    Column("trade_conditions", ARRAY(Text), nullable=False, server_default="{}"),
+    Column("trade_id", Text),
+    Column("session_date", Date, nullable=True),
+    _ts("available_at"),
+    Column("ingested_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("source_version", Text, nullable=False),
+    CheckConstraint(
+        "(status = 'resolved' AND price IS NOT NULL AND source IS NOT NULL AND reason IS NULL "
+        "AND ref_time IS NOT NULL AND session_date IS NOT NULL) "
+        "OR (status = 'unresolved' AND price IS NULL AND source IS NULL AND reason IS NOT NULL "
+        "AND ((ref_time IS NOT NULL AND session_date IS NOT NULL) "
+        "OR reason = 'calendar_uncovered'))",
+        name="ck_execution_references_status",
+    ),
+)
+
+# Written in the halt transaction; never holds symbols (the sweeper reconstructs them).
+halt_reference_requests = Table(
+    "halt_reference_requests",
+    metadata,
+    Column("run_id", UUID(as_uuid=True), ForeignKey("runs.run_id"), primary_key=True),
+    Column("trigger", Text, primary_key=True),
+    _ts("tau"),
+    Column("status", Text, nullable=False),
+    _ts("requested_at"),
+    Column("ingested_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("source_version", Text, nullable=False),
+    CheckConstraint("status = 'symbols_pending'", name="ck_halt_reference_requests_status"),
+)
+
+halt_reference_symbol_sets = Table(
+    "halt_reference_symbol_sets",
+    metadata,
+    Column("run_id", UUID(as_uuid=True), ForeignKey("runs.run_id"), primary_key=True),
+    Column("trigger", Text, primary_key=True),
+    Column("symbols", JSONB, nullable=False),
+    Column("symbol_count", Integer, nullable=False),
+    Column("symbols_sha256", Text, nullable=False),
+    Column("source", Text, nullable=False),
+    Column("source_version", Text, nullable=False),
+    _ts("resolved_at"),
+    Column("ingested_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    CheckConstraint("symbol_count > 0", name="ck_halt_symbol_sets_nonempty"),
+)
+
+halt_references = Table(
+    "halt_references",
+    metadata,
+    Column("run_id", UUID(as_uuid=True), ForeignKey("runs.run_id"), primary_key=True),
+    Column("trigger", Text, primary_key=True),
+    Column("symbol_ref", Text, primary_key=True),
+    _ts("observed_at"),
+    Column("lag_seconds", Double, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("reason", Text),
+    Column("price", Double),
+    Column("source", Text),
+    _ts("trade_time", nullable=True),
+    Column("trade_tape", Text),
+    Column("trade_conditions", ARRAY(Text), nullable=False, server_default="{}"),
+    Column("trade_id", Text),
+    Column("symbol_set_source", Text, nullable=False),
+    Column("symbol_set_version", Text, nullable=False),
+    _ts("available_at"),
+    Column("ingested_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("source_version", Text, nullable=False),
+    CheckConstraint(
+        "(status = 'resolved' AND price IS NOT NULL AND source IS NOT NULL AND reason IS NULL) "
+        "OR (status = 'unresolved' AND price IS NULL AND source IS NULL AND reason IS NOT NULL)",
+        name="ck_halt_references_status",
+    ),
+)
+
 FACT_TABLES: tuple[Table, ...] = (
     price_bars,
     fundamentals_asfiled,
@@ -423,6 +589,19 @@ FACT_TABLES: tuple[Table, ...] = (
     news_items,
     features,
     universe_snapshots,
+    trading_calendar,
 )
 HYPERTABLES: tuple[Table, ...] = (price_bars, features)
-IMMUTABLE_TABLES: tuple[Table, ...] = (fundamentals_asfiled, decision_commitments, run_resets)
+IMMUTABLE_TABLES: tuple[Table, ...] = (
+    fundamentals_asfiled,
+    decision_commitments,
+    run_resets,
+    trading_calendar,
+    calendar_coverage,
+    tbill_rates,
+    tbill_vintage_coverage,
+    execution_references,
+    halt_reference_requests,
+    halt_reference_symbol_sets,
+    halt_references,
+)

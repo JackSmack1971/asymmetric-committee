@@ -34,7 +34,7 @@ from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
 
 from contracts.commitment import CommitmentIntegrityError, CommitmentMaterial
 from contracts.enums import HALT_REASON_PREFIX, FeedName, RunMode, RunStatus
-from contracts.errors import RunHaltedError
+from contracts.errors import ImmutableConflictError, RunHaltedError
 from contracts.models import (
     CommitmentAnchor,
     DlqRecord,
@@ -133,6 +133,36 @@ class Ingests(Protocol):
     def run_feed(self, feed: FeedName, *, now: datetime) -> FeedRunResult: ...
 
 
+class ReferenceIngests(Protocol):
+    """P6.3 acquisition: calendar + coverage, benchmark bars, DGS3MO vintages."""
+
+    def run_calendar(self, now: datetime) -> int: ...
+
+    def run_benchmarks(self, now: datetime) -> int: ...
+
+    def run_dgs3mo(self, now: datetime) -> int: ...
+
+
+class References(Protocol):
+    """P6.3 run-scoped references: live capture polling, backtest builder, halt sweeper."""
+
+    def capture_due(self, now: datetime, *, on_error: Callable[[UUID, Exception], None]) -> int: ...
+
+    def build_backtest(self, run_id: UUID, now: datetime) -> Any: ...
+
+    def sweep_halt_requests(
+        self, now: datetime, *, on_error: Callable[[UUID, Exception], None]
+    ) -> int: ...
+
+
+class ReferenceJobFailedError(RuntimeError):
+    """Some runs failed in a reference poll; the others were still processed."""
+
+    def __init__(self, job: str, errors: list[str]) -> None:
+        super().__init__(f"{job}: {len(errors)} failure(s): " + "; ".join(errors[:3]))
+        self.errors = errors
+
+
 @dataclass
 class Runtime:
     """Everything the tasks use, built once per worker process (``orchestration/bootstrap.py``)."""
@@ -147,6 +177,8 @@ class Runtime:
     clock: Callable[[], datetime] = lambda: datetime.now(UTC)
     new_run_id: Callable[[], UUID] = uuid4
     ingest: Ingests | None = None
+    reference_data: ReferenceIngests | None = None
+    references: References | None = None
 
 
 _runtime: Runtime | None = None
@@ -180,6 +212,7 @@ def runtime() -> Runtime:
 # --- retry policy --------------------------------------------------------------------------------
 
 _NEVER_RETRIED = (
+    ImmutableConflictError,
     CommitmentIntegrityError,
     AnchorBindingError,
     OverfillError,
@@ -252,6 +285,64 @@ def ingest_feed(rt: Runtime, feed: FeedName, *, now: datetime | None = None) -> 
     if not result.ok:
         raise IngestFailedError(feed, result.errors)
     return {"feed": feed.value, "rows": result.rows}
+
+
+def _reference_ingest(rt: Runtime) -> ReferenceIngests:
+    if rt.reference_data is None:
+        raise RuntimeError("this worker has no reference-data runtime")
+    return rt.reference_data
+
+
+def _references(rt: Runtime) -> References:
+    if rt.references is None:
+        raise RuntimeError("this worker has no reference-capture runtime")
+    return rt.references
+
+
+def sync_calendar(rt: Runtime, *, now: datetime | None = None) -> dict[str, Any]:
+    """Fetch the calendar window and its coverage atomically. Replays are exact no-ops."""
+    return {"sessions": _reference_ingest(rt).run_calendar(now or rt.clock())}
+
+
+def ingest_benchmarks(rt: Runtime, *, now: datetime | None = None) -> dict[str, Any]:
+    """Raw SIP daily bars for SPY and the sector ETFs, through the existing bar path."""
+    return {"rows": _reference_ingest(rt).run_benchmarks(now or rt.clock())}
+
+
+def sync_dgs3mo(rt: Runtime, *, now: datetime | None = None) -> dict[str, Any]:
+    return {"rows": _reference_ingest(rt).run_dgs3mo(now or rt.clock())}
+
+
+def capture_due_references(rt: Runtime, *, now: datetime | None = None) -> dict[str, Any]:
+    """Poll for runs whose D0 open + delay has arrived. Idempotent: written rows are skipped."""
+    errors: list[str] = []
+    written = _references(rt).capture_due(
+        now or rt.clock(), on_error=lambda run_id, exc: errors.append(f"{run_id}: {exc!r}")
+    )
+    if errors:
+        raise ReferenceJobFailedError("capture_due_references", errors)
+    return {"written": written}
+
+
+def sweep_halt_references(rt: Runtime, *, now: datetime | None = None) -> dict[str, Any]:
+    """The only consumer of halt-reference requests (nothing dispatches from the halt path)."""
+    errors: list[str] = []
+    written = _references(rt).sweep_halt_requests(
+        now or rt.clock(), on_error=lambda run_id, exc: errors.append(f"{run_id}: {exc!r}")
+    )
+    if errors:
+        raise ReferenceJobFailedError("sweep_halt_references", errors)
+    return {"written": written}
+
+
+def build_backtest_references(
+    rt: Runtime, run_id: UUID, *, now: datetime | None = None
+) -> dict[str, Any]:
+    with _locked(rt, run_id, "references") as got:
+        if not got:
+            return {"run_id": str(run_id), "skipped": "locked"}
+        result = _references(rt).build_backtest(run_id, now or rt.clock())
+        return {"run_id": str(run_id), "state": result.state.value, "written": result.written}
 
 
 def weekly_run(rt: Runtime, *, now: datetime | None = None, fresh: bool = False) -> dict[str, Any]:
@@ -401,6 +492,36 @@ def run_weekly_pipeline(self: Task[Any, Any], fresh: bool = False) -> dict[str, 
 @app.task(name="orchestration.ingest_feed", **_COMMON)
 def ingest_feed_task(self: Task[Any, Any], feed: str) -> dict[str, Any]:
     return with_retry(self, lambda: ingest_feed(runtime(), FeedName(feed)))
+
+
+@app.task(name="orchestration.sync_calendar", **_COMMON)
+def sync_calendar_task(self: Task[Any, Any]) -> dict[str, Any]:
+    return with_retry(self, lambda: sync_calendar(runtime()))
+
+
+@app.task(name="orchestration.ingest_benchmarks", **_COMMON)
+def ingest_benchmarks_task(self: Task[Any, Any]) -> dict[str, Any]:
+    return with_retry(self, lambda: ingest_benchmarks(runtime()))
+
+
+@app.task(name="orchestration.sync_dgs3mo", **_COMMON)
+def sync_dgs3mo_task(self: Task[Any, Any]) -> dict[str, Any]:
+    return with_retry(self, lambda: sync_dgs3mo(runtime()))
+
+
+@app.task(name="orchestration.capture_due_references", **_COMMON)
+def capture_due_references_task(self: Task[Any, Any]) -> dict[str, Any]:
+    return with_retry(self, lambda: capture_due_references(runtime()))
+
+
+@app.task(name="orchestration.sweep_halt_references", **_COMMON)
+def sweep_halt_references_task(self: Task[Any, Any]) -> dict[str, Any]:
+    return with_retry(self, lambda: sweep_halt_references(runtime()))
+
+
+@app.task(name="orchestration.build_backtest_references", **_COMMON)
+def build_backtest_references_task(self: Task[Any, Any], run_id: str) -> dict[str, Any]:
+    return with_retry(self, lambda: build_backtest_references(runtime(), UUID(run_id)))
 
 
 @app.task(name="orchestration.advance_run", **_COMMON)

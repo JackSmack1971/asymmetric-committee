@@ -27,6 +27,7 @@ GOOD: dict[str, str] = {
     "OPENROUTER_API_KEY": "k",
     "NEWS_PROVIDER": "alpaca",
     "ALPACA_API_KEY_ID": "id",
+    "FRED_API_KEY": "fred",
     "ALPACA_API_SECRET": "secret",
     "ANCHOR_GIT_REMOTE": "https://git.example/me/anchors.git",
     "ANCHOR_GIT_BRANCH": "anchors",

@@ -18,3 +18,12 @@ uv run python -m ingest.backfill --days 90 --tickers AAPL,MSFT,... --end 2024-06
 
 Before choosing `NEWS_PROVIDER` (§18.1), inspect real news recordings with
 `ingest.news.timestamp_audit`.
+
+## `market_data/` (P6.3)
+
+Synthetic, shape-only responses for the market-data adapters: historical SIP trades (two pages),
+ALFRED `vintagedates` and `observations` for DGS3MO (including a `"."` missing value and a revised
+observation), and `/v2/stocks/meta/conditions/trade?tape=` metadata. They prove the parsers and the
+fail-closed behaviour offline; they are **not** evidence that Alpaca's real per-tape condition
+metadata matches the CTS/UTP names. Only the credentialed probe (`ingest/condition_probe.py`) can
+say that, and it never marks a mapping validated.

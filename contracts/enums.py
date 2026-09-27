@@ -217,6 +217,73 @@ class ReferenceSource(StrEnum):
     SIP_LAST = "sip_last"
 
 
+class SecurityKind(StrEnum):
+    """What a ``securities`` row is (§4.3). Only ``equity`` rows have a real CIK."""
+
+    EQUITY = "equity"
+    ETF = "etf"
+
+
+class Tape(StrEnum):
+    """Consolidated tape a trade printed on: A/B follow the CTS spec, C the UTP spec (§4.6)."""
+
+    A = "A"
+    B = "B"
+    C = "C"
+
+
+class RefStatus(StrEnum):
+    """Outcome of resolving a reference price (§4.6, §9). ``unresolved`` is durable evidence."""
+
+    RESOLVED = "resolved"
+    UNRESOLVED = "unresolved"
+
+
+class RefMode(StrEnum):
+    """How an execution reference was obtained: the live §9 rule or a historical SIP trade."""
+
+    LIVE = "live"
+    BACKTEST = "backtest"
+
+
+class RefReason(StrEnum):
+    """Why a reference is unresolved. There is deliberately no daily-price reason or source."""
+
+    NO_REFERENCE_PRICE = "no_reference_price"
+    NO_ELIGIBLE_TRADE = "no_eligible_trade"
+    UNKNOWN_CONDITION = "unknown_condition"
+    PROVIDER_MAPPING_UNVALIDATED = "provider_mapping_unvalidated"
+    SIP_ENTITLEMENT = "sip_entitlement"
+    INCOMPLETE_TRADES = "incomplete_trades"
+    CALENDAR_UNCOVERED = "calendar_uncovered"
+    AMBIGUOUS_ORDER = "ambiguous_order"  # same-instant trades that cannot be ordered or priced
+
+
+class ConditionEligibility(StrEnum):
+    """Whether one trade may set the consolidated last sale price (CTS/UTP, §4.6)."""
+
+    ELIGIBLE = "eligible"
+    INELIGIBLE = "ineligible"
+    CONDITIONAL = "conditional"  # only if it is the first/only qualifying last of the day
+    UNKNOWN = "unknown"
+
+
+class ReferenceJob(StrEnum):
+    """Market-data acquisition jobs (P6.3). They are not SLA feeds and cannot trigger a halt."""
+
+    CALENDAR = "calendar"
+    BENCHMARKS = "benchmarks"
+    DGS3MO = "dgs3mo"
+    REFERENCES = "references"  # polls for runs whose reference window is due
+    HALT_SWEEP = "halt_sweep"  # resolves pending halt-reference requests
+
+
+class HaltRequestStatus(StrEnum):
+    """A halt-reference request is only ever written pending; state is derived from later rows."""
+
+    SYMBOLS_PENDING = "symbols_pending"
+
+
 class ModelTier(StrEnum):
     """LLM tiers (§10.1)."""
 

@@ -20,6 +20,7 @@ from contracts.enums import (
     Horizon,
     ModelTier,
     ReasoningEffort,
+    ReferenceJob,
 )
 from contracts.models import MAX_POSITION
 
@@ -320,6 +321,22 @@ class IngestConfig(_Cfg):
     lookback_days: int = Field(ge=1, le=30)
 
 
+class ReferenceDataConfig(_Cfg):
+    """P6.3 acquisition jobs. Separate from ``freshness_sla_hours`` on purpose: these are not
+    SLA'd feeds, so they can never become a stale-feed kill-switch trigger."""
+
+    cadence_minutes: dict[ReferenceJob, PosFloat] = Field(min_length=1)
+    # Operational timeout only: how long after a run's commitment we wait for calendar coverage
+    # before persisting `calendar_uncovered`. It never infers D0 or whether a date was open.
+    calendar_coverage_wait_minutes: PosFloat
+    # How long after D0 open + delay a live capture may still observe the §9 rule.
+    live_capture_grace_minutes: PosFloat
+    # How soon after a halt the live rule still counts as the closest observation to it.
+    halt_live_grace_minutes: PosFloat
+    calendar_forward_days: int = Field(ge=30, le=730)  # sessions needed ahead for 63-day horizons
+    calendar_back_days: int = Field(ge=1, le=3650)
+
+
 class PipelineConfig(_Cfg):
     gate: GateConfig
     rebalance: RebalanceConfig
@@ -330,6 +347,7 @@ class PipelineConfig(_Cfg):
     budgets: BudgetsConfig
     freshness_sla_hours: dict[FeedName, PosFloat] = Field(min_length=1)
     ingest: IngestConfig
+    reference_data: ReferenceDataConfig
 
     @model_validator(mode="after")
     def _cadence_meets_sla(self) -> Self:

@@ -13,7 +13,19 @@ from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel
-from sqlalchemy import Connection, Table, and_, delete, func, literal, not_, or_, select, update
+from sqlalchemy import (
+    Connection,
+    Table,
+    and_,
+    delete,
+    func,
+    literal,
+    not_,
+    or_,
+    select,
+    tuple_,
+    update,
+)
 from sqlalchemy.dialects.postgresql import insert
 
 from contracts.commitment import CommitmentIntegrityError, CommitmentMaterial
@@ -29,21 +41,32 @@ from contracts.enums import (
     HALT_REASON_PREFIX,
     TERMINAL_ORDER_STATUSES,
     AgentName,
-    BearSeverity,
-    CioAction,
     FeedName,
-    Horizon,
     RunMode,
     RunStatus,
-    SizingMode,
+    SecurityKind,
     halt_reason,
 )
-from contracts.errors import AnchorIncompleteError, ResetRefusedError, RunHaltedError
+from contracts.errors import (
+    AnchorIncompleteError,
+    ImmutableConflictError,
+    ResetRefusedError,
+    RunHaltedError,
+)
+from contracts.market_data import (
+    CalendarCoverage,
+    ExecutionReference,
+    HaltReference,
+    HaltReferenceRequest,
+    HaltSymbolSet,
+    TBillObservation,
+    TBillVintageCoverage,
+    TradingSession,
+    calendar_hash,
+)
 from contracts.models import (
     AgentVerdict,
-    AgentWeight,
     CommitmentAnchor,
-    CommitteeDecision,
     CommitteeDecisionRecord,
     DecisionCommitment,
     DlqRecord,
@@ -57,6 +80,7 @@ from contracts.models import (
     VerdictRecord,
 )
 from store import _tables as t
+from store._material import decisions_from_rows, snapshot_from_row
 
 _CHUNK = 1000
 
@@ -156,6 +180,21 @@ def ensure_security(
     return int(conn.execute(upsert).scalar_one())
 
 
+def ensure_reference_instrument(
+    conn: Connection, *, ticker: str, name: str, kind: SecurityKind = SecurityKind.ETF
+) -> int:
+    """Create or refresh SPY / a sector ETF (kind ``etf``, no CIK) and return its id."""
+    if kind is SecurityKind.EQUITY:
+        raise ValueError("a reference instrument is not an equity; use ensure_security")
+    stmt = insert(t.securities).values(ticker=ticker, cik=None, name=name, kind=kind.value)
+    upsert = stmt.on_conflict_do_update(
+        index_elements=[t.securities.c.ticker],
+        index_where=t.securities.c.kind != SecurityKind.EQUITY.value,
+        set_={"name": stmt.excluded.name},
+    ).returning(t.securities.c.security_id)
+    return int(conn.execute(upsert).scalar_one())
+
+
 def set_listing(
     conn: Connection, security_id: int, *, listed_from: date | None, listed_to: date | None
 ) -> None:
@@ -172,7 +211,7 @@ def security_ids_by_ticker(
     conn: Connection, tickers: Iterable[str] | None = None
 ) -> dict[str, int]:
     c = t.securities.c
-    stmt = select(c.ticker, c.security_id)
+    stmt = select(c.ticker, c.security_id).where(c.kind == SecurityKind.EQUITY.value)
     if tickers is not None:
         stmt = stmt.where(c.ticker.in_(list(tickers)))
     return {tk: sid for tk, sid in conn.execute(stmt).tuples()}
@@ -180,7 +219,10 @@ def security_ids_by_ticker(
 
 def security_ids_by_cik(conn: Connection) -> Mapping[int, list[int]]:
     out: dict[int, list[int]] = {}
-    for cik, sid in conn.execute(select(t.securities.c.cik, t.securities.c.security_id)).tuples():
+    stmt = select(t.securities.c.cik, t.securities.c.security_id).where(
+        t.securities.c.kind == SecurityKind.EQUITY.value
+    )
+    for cik, sid in conn.execute(stmt).tuples():
         out.setdefault(cik, []).append(sid)
     return out
 
@@ -442,11 +484,17 @@ def load_commitment_hash(conn: Connection, run_id: UUID) -> str | None:
     return conn.execute(select(c.sha256).where(c.run_id == run_id)).scalar_one_or_none()
 
 
+def load_committed_at(conn: Connection, run_id: UUID) -> datetime | None:
+    """When the run's commitment was recorded (immutable; the start of the reference waits)."""
+    c = t.decision_commitments.c
+    return conn.execute(select(c.committed_at).where(c.run_id == run_id)).scalar_one_or_none()
+
+
 def load_snapshot(conn: Connection, run_id: UUID) -> PortfolioSnapshot | None:
     """The committed final book with its CIO decision, if one was stored."""
     c = t.portfolio_snapshots.c
     row = conn.execute(select(t.portfolio_snapshots).where(c.run_id == run_id)).mappings().first()
-    return None if row is None else PortfolioSnapshot.model_validate(dict(row))
+    return None if row is None else snapshot_from_row(dict(row))
 
 
 def advance_to_executed(conn: Connection, run_id: UUID, ended_at: datetime) -> bool:
@@ -501,51 +549,14 @@ def load_anchor(conn: Connection, run_id: UUID) -> CommitmentAnchor | None:
 
 
 def load_decisions(conn: Connection, run: RunRecord) -> list[CommitteeDecisionRecord]:
-    """Stored committee decisions rebuilt as the records that were hashed, or raise.
-
-    A row without ``entity_token`` (written before migration 0006) cannot be rebuilt, so the
-    commitment of such a run cannot be verified: that is an integrity failure, not a skip.
-    """
+    """Stored committee decisions rebuilt as the records that were hashed, or raise."""
     c = t.committee_decisions.c
-    out: list[CommitteeDecisionRecord] = []
     query = (
         select(t.committee_decisions)
         .where(c.run_id == run.run_id)
         .order_by(c.security_id, c.horizon)
     )
-    for r in conn.execute(query).mappings():
-        if r["entity_token"] is None:
-            raise CommitmentIntegrityError(
-                f"run {run.run_id}: decision for security {r['security_id']} has no entity_token"
-            )
-        try:
-            out.append(
-                CommitteeDecisionRecord(
-                    decision=CommitteeDecision(
-                        run_id=run.run_id,
-                        security_id=r["security_id"],
-                        entity_token=r["entity_token"],
-                        as_of=run.as_of,
-                        horizon_days=Horizon(r["horizon"]),
-                        pooled_p=r["pooled_p"],
-                        dispersion=r["dispersion"],
-                        agent_weights=tuple(AgentWeight.model_validate(w) for w in r["weights"]),
-                        bear_severity=BearSeverity(r["bear_severity"])
-                        if r["bear_severity"]
-                        else None,
-                        target_weight=r["target_weight"],
-                    ),
-                    pooled_logit=r["pooled_logit"],
-                    sizing_mode=SizingMode(r["sizing_mode"]) if r["sizing_mode"] else None,
-                    cio_action=CioAction(r["cio_action"]) if r["cio_action"] else None,
-                    rationale=r["rationale"],
-                )
-            )
-        except ValueError as exc:
-            raise CommitmentIntegrityError(
-                f"run {run.run_id}: stored decision invalid: {exc}"
-            ) from exc
-    return out
+    return decisions_from_rows(run, [dict(r) for r in conn.execute(query).mappings()])
 
 
 def load_commitment_material(conn: Connection, run_id: UUID) -> CommitmentMaterial | None:
@@ -601,6 +612,18 @@ def record_halt(conn: Connection, event: KillSwitchEvent) -> bool:
     True when this call moved the run.
     """
     insert_kill_switch_events(conn, (event,))
+    insert_halt_reference_requests(
+        conn,
+        (
+            HaltReferenceRequest(
+                run_id=event.run_id,
+                trigger=event.trigger,
+                tau=event.triggered_at,
+                requested_at=event.triggered_at,
+                source_version=HALT_REQUEST_VERSION,
+            ),
+        ),
+    )
     c = t.runs.c
     result = conn.execute(
         update(t.runs)
@@ -820,3 +843,129 @@ def load_execution_record(conn: Connection, client_order_id: str) -> ExecutionRe
     return ExecutionRecord.model_validate(
         {k: row[k] for k in ExecutionRecord.model_fields if k in row}
     )
+
+
+# --- market-data foundations (P6.3): immutable, conflict-checked writers ---------------------
+
+HALT_REQUEST_VERSION = "halt_request_v1"
+
+# Columns that record when *we* wrote or re-fetched a row, not what the row says. A replay of the
+# same evidence carries a new value here, which is not a contradiction; the first value stands.
+_WRITE_TIME = frozenset({"ingested_at", "available_at", "established_at", "resolved_at"})
+
+
+def _canonical(value: Any) -> Any:
+    """One comparable form for a value, whether it came from Python or from the database."""
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            raise ValueError("naive datetime in an immutable payload")
+        return value.astimezone(UTC).isoformat(timespec="microseconds")
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, Mapping):
+        return {str(k): _canonical(v) for k, v in sorted(value.items(), key=lambda kv: str(kv[0]))}
+    if isinstance(value, (list, tuple)):
+        return [_canonical(v) for v in value]
+    return value
+
+
+def _insert_immutable(
+    conn: Connection,
+    table: Table,
+    models: Sequence[BaseModel],
+    key_cols: Sequence[str],
+) -> int:
+    """Insert-only writer: exact replay is a no-op, a contradicting replay raises.
+
+    ``ON CONFLICT DO NOTHING`` alone would hide two different payloads under one natural key. Every
+    presented row is therefore read back by key and compared, after canonicalising both sides,
+    on all columns except the ones that only record when it was written.
+    """
+    rows = [_row(m, table) for m in models]
+    if not rows:
+        return 0
+    payload_cols = [c.name for c in table.c if c.name not in key_cols and c.name not in _WRITE_TIME]
+    inserted = 0
+    for i in range(0, len(rows), _CHUNK):
+        chunk = rows[i : i + _CHUNK]
+        stmt = insert(table).values(chunk).on_conflict_do_nothing().returning(literal(1))
+        inserted += len(conn.execute(stmt).all())
+        keys = [tuple(r[k] for k in key_cols) for r in chunk]
+        stored = {
+            tuple(row[k] for k in key_cols): row
+            for row in conn.execute(
+                select(table).where(tuple_(*[table.c[k] for k in key_cols]).in_(keys))
+            )
+            .mappings()
+            .all()
+        }
+        for r in chunk:
+            key = tuple(r[k] for k in key_cols)
+            existing = stored[key]
+            for col in payload_cols:
+                if col not in r:
+                    continue
+                if _canonical(existing[col]) != _canonical(r[col]):
+                    raise ImmutableConflictError(
+                        f"{table.name} {dict(zip(key_cols, key, strict=True))}: {col} is "
+                        f"{existing[col]!r} but {r[col]!r} was presented"
+                    )
+    return inserted
+
+
+def insert_calendar_range(
+    conn: Connection, sessions: Sequence[TradingSession], coverage: CalendarCoverage
+) -> int:
+    """Sessions and the coverage record that vouches for them, in one savepoint.
+
+    ``coverage.sessions_sha256`` must be `calendar_hash` of exactly ``sessions``, so a revised
+    session set cannot be stored without a new coverage record.
+    """
+    if coverage.session_count != len(sessions) or coverage.sessions_sha256 != calendar_hash(
+        sessions
+    ):
+        raise ValueError("coverage does not describe the sessions written with it")
+    for s in sessions:
+        if not coverage.range_start <= s.session_date <= coverage.range_end:
+            raise ValueError(f"session {s.session_date} is outside the covered range")
+        if s.available_at != coverage.available_at:
+            raise ValueError("sessions and their coverage share one available_at")
+    with conn.begin_nested():
+        n = _insert_immutable(
+            conn, t.trading_calendar, sessions, ("session_date", "source_version")
+        )
+        _insert_immutable(
+            conn,
+            t.calendar_coverage,
+            [coverage],
+            ("source", "range_start", "range_end", "source_version"),
+        )
+    return n
+
+
+def insert_tbill_rates(conn: Connection, rows: Sequence[TBillObservation]) -> int:
+    return _insert_immutable(
+        conn, t.tbill_rates, rows, ("series", "observation_date", "vintage_date")
+    )
+
+
+def insert_tbill_vintage_coverage(conn: Connection, row: TBillVintageCoverage) -> int:
+    return _insert_immutable(conn, t.tbill_vintage_coverage, [row], ("series", "source_version"))
+
+
+def insert_execution_references(conn: Connection, rows: Sequence[ExecutionReference]) -> int:
+    return _insert_immutable(conn, t.execution_references, rows, ("run_id", "symbol_ref"))
+
+
+def insert_halt_reference_requests(conn: Connection, rows: Sequence[HaltReferenceRequest]) -> int:
+    return _insert_immutable(conn, t.halt_reference_requests, rows, ("run_id", "trigger"))
+
+
+def insert_halt_symbol_set(conn: Connection, row: HaltSymbolSet) -> int:
+    return _insert_immutable(conn, t.halt_reference_symbol_sets, [row], ("run_id", "trigger"))
+
+
+def insert_halt_references(conn: Connection, rows: Sequence[HaltReference]) -> int:
+    return _insert_immutable(conn, t.halt_references, rows, ("run_id", "trigger", "symbol_ref"))

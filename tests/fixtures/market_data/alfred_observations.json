@@ -1,0 +1,35 @@
+{
+  "count": 5,
+  "observations": [
+    {
+      "realtime_start": "2024-03-06",
+      "realtime_end": "2024-03-06",
+      "date": "2024-03-05",
+      "value": "5.21"
+    },
+    {
+      "realtime_start": "2024-03-07",
+      "realtime_end": "9999-12-31",
+      "date": "2024-03-05",
+      "value": "5.22"
+    },
+    {
+      "realtime_start": "2024-03-07",
+      "realtime_end": "9999-12-31",
+      "date": "2024-03-06",
+      "value": "."
+    },
+    {
+      "realtime_start": "2024-03-07",
+      "realtime_end": "9999-12-31",
+      "date": "2024-03-07",
+      "value": "5.24"
+    },
+    {
+      "realtime_start": "2024-03-05",
+      "realtime_end": "9999-12-31",
+      "date": "2024-03-04",
+      "value": "5.20"
+    }
+  ]
+}

@@ -19,6 +19,7 @@ from sqlalchemy import Engine, func, select
 from contracts.commitment import CommitmentMaterial
 from contracts.enums import RunMode, RunStatus
 from contracts.errors import ResetRefusedError
+from contracts.market_data import ExecutionReference, HaltReference, HaltSymbolSet
 from contracts.models import (
     CommitmentAnchor,
     DlqRecord,
@@ -72,6 +73,20 @@ class DecisionSink:
         commit together (§9). True when this call moved the run."""
         with self._engine.begin() as conn:
             return write.record_halt(conn, event)
+
+    def record_execution_references(self, rows: Sequence[ExecutionReference]) -> int:
+        """Run-scoped scoring references (insert-only). Exact replay is a no-op; a contradicting
+        replay raises ``ImmutableConflictError``."""
+        with self._engine.begin() as conn:
+            return write.insert_execution_references(conn, rows)
+
+    def record_halt_symbol_set(self, symbol_set: HaltSymbolSet) -> int:
+        with self._engine.begin() as conn:
+            return write.insert_halt_symbol_set(conn, symbol_set)
+
+    def record_halt_references(self, rows: Sequence[HaltReference]) -> int:
+        with self._engine.begin() as conn:
+            return write.insert_halt_references(conn, rows)
 
     def record_anchor(self, anchor: CommitmentAnchor) -> None:
         """Upgrade an existing anchor (proof, git commit, Bitcoin confirmation). It never moves the
@@ -172,6 +187,10 @@ class DecisionSink:
     def load_snapshot(self, run_id: UUID) -> PortfolioSnapshot | None:
         with self._engine.connect() as conn:
             return write.load_snapshot(conn, run_id)
+
+    def load_committed_at(self, run_id: UUID) -> datetime | None:
+        with self._engine.connect() as conn:
+            return write.load_committed_at(conn, run_id)
 
     def load_commitment_hash(self, run_id: UUID) -> str | None:
         with self._engine.connect() as conn:

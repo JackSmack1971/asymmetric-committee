@@ -27,7 +27,11 @@ from contracts.enums import AgentName, ModelTier, RunMode
 from contracts.models import AgentVerdictLLM, CioDecisionLLM, Contract, RedTeamVerdictLLM
 from execution.alpaca import AlpacaPaperGateway
 from execution.reference import AlpacaMarketData
+from execution.trade_conditions import load_provider_map
+from ingest.alpaca_trades import AlpacaTrades
 from ingest.backfill import build_sources
+from ingest.fred import AlfredClient
+from ingest.reference_data import ReferenceDataIngestor, benchmark_tickers
 from ingest.scheduled import FeedIngestor
 from orchestration.anchor_adapters import EsploraHeaders, GitAnchorRepo, OtsCalendars
 from orchestration.anchor_stage import AnchorStage, AnchorUpgrader
@@ -35,6 +39,7 @@ from orchestration.execution_stage import ExecutionStage
 from orchestration.loader import StoreStepLoader
 from orchestration.pipeline import BacktestOrchestrator, config_fingerprint
 from orchestration.providers import StoreMarketView, reference_provider, store_feeds
+from orchestration.references import ReferenceCapture
 from orchestration.sink import DecisionSink
 from orchestration.startup import assert_startup_ready, calendars
 from orchestration.tasks import Runtime
@@ -134,6 +139,9 @@ def build_runtime(env: Mapping[str, str] | None = None) -> Runtime:
         sleep=time.sleep,
     )
     explorer = svc.env.get("ANCHOR_BLOCK_EXPLORER_URL", DEFAULT_EXPLORER)
+    sources = build_sources(None, replay=False, env=dict(svc.env))
+    ref_cfg = svc.cfg.pipeline.reference_data
+    fred_key = svc.env.get("FRED_API_KEY", "")
     return Runtime(
         sink=svc.sink,
         pipeline=svc.orchestrator(RunMode.LIVE),
@@ -150,7 +158,29 @@ def build_runtime(env: Mapping[str, str] | None = None) -> Runtime:
         clock=svc.clock,
         ingest=FeedIngestor(
             svc.engine,
-            build_sources(None, replay=False, env=dict(svc.env)),
+            sources,
             lookback=timedelta(days=svc.cfg.pipeline.ingest.lookback_days),
+        ),
+        reference_data=ReferenceDataIngestor(
+            svc.engine,
+            calendar=gateway,
+            bars=sources.bars,
+            alfred=AlfredClient(api_key=fred_key) if fred_key else None,
+            benchmarks=benchmark_tickers([s.etf for s in svc.cfg.sectors.sectors]),
+            forward_days=ref_cfg.calendar_forward_days,
+            back_days=ref_cfg.calendar_back_days,
+            bar_lookback_days=svc.cfg.pipeline.ingest.lookback_days,
+        ),
+        references=ReferenceCapture(
+            svc.engine,
+            svc.sink,
+            ref_cfg,
+            delay_minutes=svc.cfg.pipeline.rebalance.minutes_after_open,
+            config_hash=config_fingerprint(svc.cfg),
+            quotes=market,
+            trades=AlpacaTrades(
+                key_id=svc.env["ALPACA_API_KEY_ID"], secret=svc.env["ALPACA_API_SECRET"]
+            ),
+            provider_map=load_provider_map(),
         ),
     )

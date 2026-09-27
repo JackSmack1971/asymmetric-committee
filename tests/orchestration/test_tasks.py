@@ -533,7 +533,17 @@ def test_beat_is_scheduled_from_the_trading_calendar_not_fixed_dates() -> None:
         "orchestration.sweep_runs",
         "orchestration.upgrade_anchors",
         "orchestration.ingest_feed",
+        "orchestration.sync_calendar",
+        "orchestration.ingest_benchmarks",
+        "orchestration.sync_dgs3mo",
+        "orchestration.capture_due_references",
+        "orchestration.sweep_halt_references",
     }
+    # P6.3 reference jobs are interval polls, never a fixed weekday/clock cron (D0 comes from the
+    # stored calendar), and nothing dispatches from the halt path.
+    for name, entry in schedule.items():
+        if name.startswith("reference-"):
+            assert isinstance(entry["schedule"], timedelta), name
     assert app.conf.task_acks_late is True and str(app.conf.timezone) == "America/New_York"
     assert app.conf.broker_transport_options["visibility_timeout"] >= 6 * 3600
 

@@ -1,0 +1,442 @@
+# Provider (Alpaca) trade-condition code -> specification code, per tape (§4.6).
+#
+# The consolidated-last effect of each specification code is normative and lives in
+# execution/trade_conditions.py (CTA CTS Pillar Output Specification v2.11b for tapes A/B; UTP Data
+# Feed Services Specification v4.1 for tape C). This file only translates Alpaca's codes.
+#
+# EVERY ENTRY SHIPS `validated: false`. `expected_provider_name` is what the specification calls the
+# code, not evidence of what Alpaca returns. Production, backtest and halt-reconstruction resolution
+# refuse an unvalidated entry (reason `provider_mapping_unvalidated`). Nothing in this repository sets
+# `validated`: the credentialed probe (`python -m ingest.condition_probe`) fetches
+# /v2/stocks/meta/conditions/trade?tape=A|B|C, compares every returned tape/code/name with these
+# entries, fails on any drift or unknown value, and only writes a PROPOSED file for the owner to
+# review. Flipping `validated` is an owner commit.
+tapes:
+  A:
+    - provider_code: "@"
+      spec_code: " "
+      expected_provider_name: "Regular Sale"
+      spec_name: "Regular Sale"
+      validated: false
+    - provider_code: "B"
+      spec_code: "B"
+      expected_provider_name: "Average Price Trade"
+      spec_name: "Average Price Trade"
+      validated: false
+    - provider_code: "C"
+      spec_code: "C"
+      expected_provider_name: "Cash Trade (Same Day Clearing)"
+      spec_name: "Cash Trade (Same Day Clearing)"
+      validated: false
+    - provider_code: "E"
+      spec_code: "E"
+      expected_provider_name: "Automatic Execution"
+      spec_name: "Automatic Execution"
+      validated: false
+    - provider_code: "F"
+      spec_code: "F"
+      expected_provider_name: "Intermarket Sweep Order"
+      spec_name: "Intermarket Sweep Order"
+      validated: false
+    - provider_code: "H"
+      spec_code: "H"
+      expected_provider_name: "Price Variation Trade"
+      spec_name: "Price Variation Trade"
+      validated: false
+    - provider_code: "I"
+      spec_code: "I"
+      expected_provider_name: "Odd Lot Trade"
+      spec_name: "Odd Lot Trade"
+      validated: false
+    - provider_code: "K"
+      spec_code: "K"
+      expected_provider_name: "Rule 127 (NYSE only) or Rule 155 (NYSE American only)"
+      spec_name: "Rule 127 (NYSE only) or Rule 155 (NYSE American only)"
+      validated: false
+    - provider_code: "L"
+      spec_code: "L"
+      expected_provider_name: "Sold Last (Late Reporting)"
+      spec_name: "Sold Last (Late Reporting)"
+      validated: false
+    - provider_code: "M"
+      spec_code: "M"
+      expected_provider_name: "Market Center Official Close"
+      spec_name: "Market Center Official Close"
+      validated: false
+    - provider_code: "N"
+      spec_code: "N"
+      expected_provider_name: "Reserved"
+      spec_name: "Reserved"
+      validated: false
+    - provider_code: "O"
+      spec_code: "O"
+      expected_provider_name: "Market Center Opening Trade"
+      spec_name: "Market Center Opening Trade"
+      validated: false
+    - provider_code: "P"
+      spec_code: "P"
+      expected_provider_name: "Prior Reference Price"
+      spec_name: "Prior Reference Price"
+      validated: false
+    - provider_code: "Q"
+      spec_code: "Q"
+      expected_provider_name: "Market Center Official Open"
+      spec_name: "Market Center Official Open"
+      validated: false
+    - provider_code: "R"
+      spec_code: "R"
+      expected_provider_name: "Seller"
+      spec_name: "Seller"
+      validated: false
+    - provider_code: "T"
+      spec_code: "T"
+      expected_provider_name: "Extended Hours Trade"
+      spec_name: "Extended Hours Trade"
+      validated: false
+    - provider_code: "U"
+      spec_code: "U"
+      expected_provider_name: "Extended Hours Sold (Out Of Sequence)"
+      spec_name: "Extended Hours Sold (Out Of Sequence)"
+      validated: false
+    - provider_code: "V"
+      spec_code: "V"
+      expected_provider_name: "Contingent Trade"
+      spec_name: "Contingent Trade"
+      validated: false
+    - provider_code: "X"
+      spec_code: "X"
+      expected_provider_name: "Cross / Periodic Auction Trade"
+      spec_name: "Cross / Periodic Auction Trade"
+      validated: false
+    - provider_code: "Z"
+      spec_code: "Z"
+      expected_provider_name: "Sold (Out Of Sequence)"
+      spec_name: "Sold (Out Of Sequence)"
+      validated: false
+    - provider_code: "4"
+      spec_code: "4"
+      expected_provider_name: "Derivatively Priced"
+      spec_name: "Derivatively Priced"
+      validated: false
+    - provider_code: "5"
+      spec_code: "5"
+      expected_provider_name: "Market Center Reopening Trade"
+      spec_name: "Market Center Reopening Trade"
+      validated: false
+    - provider_code: "6"
+      spec_code: "6"
+      expected_provider_name: "Market Center Closing Trade"
+      spec_name: "Market Center Closing Trade"
+      validated: false
+    - provider_code: "7"
+      spec_code: "7"
+      expected_provider_name: "Qualified Contingent Trade"
+      spec_name: "Qualified Contingent Trade"
+      validated: false
+    - provider_code: "8"
+      spec_code: "8"
+      expected_provider_name: "Reserved"
+      spec_name: "Reserved"
+      validated: false
+    - provider_code: "9"
+      spec_code: "9"
+      expected_provider_name: "Corrected Consolidated Close Price as per Listing Market"
+      spec_name: "Corrected Consolidated Close Price as per Listing Market"
+      validated: false
+  B:
+    - provider_code: "@"
+      spec_code: " "
+      expected_provider_name: "Regular Sale"
+      spec_name: "Regular Sale"
+      validated: false
+    - provider_code: "B"
+      spec_code: "B"
+      expected_provider_name: "Average Price Trade"
+      spec_name: "Average Price Trade"
+      validated: false
+    - provider_code: "C"
+      spec_code: "C"
+      expected_provider_name: "Cash Trade (Same Day Clearing)"
+      spec_name: "Cash Trade (Same Day Clearing)"
+      validated: false
+    - provider_code: "E"
+      spec_code: "E"
+      expected_provider_name: "Automatic Execution"
+      spec_name: "Automatic Execution"
+      validated: false
+    - provider_code: "F"
+      spec_code: "F"
+      expected_provider_name: "Intermarket Sweep Order"
+      spec_name: "Intermarket Sweep Order"
+      validated: false
+    - provider_code: "H"
+      spec_code: "H"
+      expected_provider_name: "Price Variation Trade"
+      spec_name: "Price Variation Trade"
+      validated: false
+    - provider_code: "I"
+      spec_code: "I"
+      expected_provider_name: "Odd Lot Trade"
+      spec_name: "Odd Lot Trade"
+      validated: false
+    - provider_code: "K"
+      spec_code: "K"
+      expected_provider_name: "Rule 127 (NYSE only) or Rule 155 (NYSE American only)"
+      spec_name: "Rule 127 (NYSE only) or Rule 155 (NYSE American only)"
+      validated: false
+    - provider_code: "L"
+      spec_code: "L"
+      expected_provider_name: "Sold Last (Late Reporting)"
+      spec_name: "Sold Last (Late Reporting)"
+      validated: false
+    - provider_code: "M"
+      spec_code: "M"
+      expected_provider_name: "Market Center Official Close"
+      spec_name: "Market Center Official Close"
+      validated: false
+    - provider_code: "N"
+      spec_code: "N"
+      expected_provider_name: "Reserved"
+      spec_name: "Reserved"
+      validated: false
+    - provider_code: "O"
+      spec_code: "O"
+      expected_provider_name: "Market Center Opening Trade"
+      spec_name: "Market Center Opening Trade"
+      validated: false
+    - provider_code: "P"
+      spec_code: "P"
+      expected_provider_name: "Prior Reference Price"
+      spec_name: "Prior Reference Price"
+      validated: false
+    - provider_code: "Q"
+      spec_code: "Q"
+      expected_provider_name: "Market Center Official Open"
+      spec_name: "Market Center Official Open"
+      validated: false
+    - provider_code: "R"
+      spec_code: "R"
+      expected_provider_name: "Seller"
+      spec_name: "Seller"
+      validated: false
+    - provider_code: "T"
+      spec_code: "T"
+      expected_provider_name: "Extended Hours Trade"
+      spec_name: "Extended Hours Trade"
+      validated: false
+    - provider_code: "U"
+      spec_code: "U"
+      expected_provider_name: "Extended Hours Sold (Out Of Sequence)"
+      spec_name: "Extended Hours Sold (Out Of Sequence)"
+      validated: false
+    - provider_code: "V"
+      spec_code: "V"
+      expected_provider_name: "Contingent Trade"
+      spec_name: "Contingent Trade"
+      validated: false
+    - provider_code: "X"
+      spec_code: "X"
+      expected_provider_name: "Cross / Periodic Auction Trade"
+      spec_name: "Cross / Periodic Auction Trade"
+      validated: false
+    - provider_code: "Z"
+      spec_code: "Z"
+      expected_provider_name: "Sold (Out Of Sequence)"
+      spec_name: "Sold (Out Of Sequence)"
+      validated: false
+    - provider_code: "4"
+      spec_code: "4"
+      expected_provider_name: "Derivatively Priced"
+      spec_name: "Derivatively Priced"
+      validated: false
+    - provider_code: "5"
+      spec_code: "5"
+      expected_provider_name: "Market Center Reopening Trade"
+      spec_name: "Market Center Reopening Trade"
+      validated: false
+    - provider_code: "6"
+      spec_code: "6"
+      expected_provider_name: "Market Center Closing Trade"
+      spec_name: "Market Center Closing Trade"
+      validated: false
+    - provider_code: "7"
+      spec_code: "7"
+      expected_provider_name: "Qualified Contingent Trade"
+      spec_name: "Qualified Contingent Trade"
+      validated: false
+    - provider_code: "8"
+      spec_code: "8"
+      expected_provider_name: "Reserved"
+      spec_name: "Reserved"
+      validated: false
+    - provider_code: "9"
+      spec_code: "9"
+      expected_provider_name: "Corrected Consolidated Close Price as per Listing Market"
+      spec_name: "Corrected Consolidated Close Price as per Listing Market"
+      validated: false
+  C:
+    - provider_code: "@"
+      spec_code: "@"
+      expected_provider_name: "Regular Sale"
+      spec_name: "Regular Sale"
+      validated: false
+    - provider_code: "A"
+      spec_code: "A"
+      expected_provider_name: "Acquisition"
+      spec_name: "Acquisition"
+      validated: false
+    - provider_code: "B"
+      spec_code: "B"
+      expected_provider_name: "Bunched Trade"
+      spec_name: "Bunched Trade"
+      validated: false
+    - provider_code: "C"
+      spec_code: "C"
+      expected_provider_name: "Cash Sale"
+      spec_name: "Cash Sale"
+      validated: false
+    - provider_code: "D"
+      spec_code: "D"
+      expected_provider_name: "Distribution"
+      spec_name: "Distribution"
+      validated: false
+    - provider_code: "E"
+      spec_code: "E"
+      expected_provider_name: "Placeholder"
+      spec_name: "Placeholder"
+      validated: false
+    - provider_code: "F"
+      spec_code: "F"
+      expected_provider_name: "Intermarket Sweep"
+      spec_name: "Intermarket Sweep"
+      validated: false
+    - provider_code: "G"
+      spec_code: "G"
+      expected_provider_name: "Bunched Sold Trade"
+      spec_name: "Bunched Sold Trade"
+      validated: false
+    - provider_code: "H"
+      spec_code: "H"
+      expected_provider_name: "Price Variation Trade"
+      spec_name: "Price Variation Trade"
+      validated: false
+    - provider_code: "I"
+      spec_code: "I"
+      expected_provider_name: "Odd Lot Trade"
+      spec_name: "Odd Lot Trade"
+      validated: false
+    - provider_code: "K"
+      spec_code: "K"
+      expected_provider_name: "Rule 155 Trade (AMEX)"
+      spec_name: "Rule 155 Trade (AMEX)"
+      validated: false
+    - provider_code: "L"
+      spec_code: "L"
+      expected_provider_name: "Sold Last"
+      spec_name: "Sold Last"
+      validated: false
+    - provider_code: "M"
+      spec_code: "M"
+      expected_provider_name: "Market Center Official Close"
+      spec_name: "Market Center Official Close"
+      validated: false
+    - provider_code: "N"
+      spec_code: "N"
+      expected_provider_name: "Reserved"
+      spec_name: "Reserved"
+      validated: false
+    - provider_code: "O"
+      spec_code: "O"
+      expected_provider_name: "Opening Prints"
+      spec_name: "Opening Prints"
+      validated: false
+    - provider_code: "P"
+      spec_code: "P"
+      expected_provider_name: "Prior Reference Price"
+      spec_name: "Prior Reference Price"
+      validated: false
+    - provider_code: "Q"
+      spec_code: "Q"
+      expected_provider_name: "Market Center Official Open"
+      spec_name: "Market Center Official Open"
+      validated: false
+    - provider_code: "R"
+      spec_code: "R"
+      expected_provider_name: "Seller"
+      spec_name: "Seller"
+      validated: false
+    - provider_code: "S"
+      spec_code: "S"
+      expected_provider_name: "Split Trade"
+      spec_name: "Split Trade"
+      validated: false
+    - provider_code: "T"
+      spec_code: "T"
+      expected_provider_name: "Form T"
+      spec_name: "Form T"
+      validated: false
+    - provider_code: "U"
+      spec_code: "U"
+      expected_provider_name: "Extended trading hours (Sold Out of Sequence)"
+      spec_name: "Extended trading hours (Sold Out of Sequence)"
+      validated: false
+    - provider_code: "V"
+      spec_code: "V"
+      expected_provider_name: "Contingent Trade"
+      spec_name: "Contingent Trade"
+      validated: false
+    - provider_code: "W"
+      spec_code: "W"
+      expected_provider_name: "Average Price Trade"
+      spec_name: "Average Price Trade"
+      validated: false
+    - provider_code: "X"
+      spec_code: "X"
+      expected_provider_name: "Cross/Periodic Auction Trade"
+      spec_name: "Cross/Periodic Auction Trade"
+      validated: false
+    - provider_code: "Y"
+      spec_code: "Y"
+      expected_provider_name: "Yellow Flag Regular Trade"
+      spec_name: "Yellow Flag Regular Trade"
+      validated: false
+    - provider_code: "Z"
+      spec_code: "Z"
+      expected_provider_name: "Sold (out of sequence)"
+      spec_name: "Sold (out of sequence)"
+      validated: false
+    - provider_code: "1"
+      spec_code: "1"
+      expected_provider_name: "Stopped Stock (Regular Trade)"
+      spec_name: "Stopped Stock (Regular Trade)"
+      validated: false
+    - provider_code: "4"
+      spec_code: "4"
+      expected_provider_name: "Derivatively priced"
+      spec_name: "Derivatively priced"
+      validated: false
+    - provider_code: "5"
+      spec_code: "5"
+      expected_provider_name: "Re-Opening Prints"
+      spec_name: "Re-Opening Prints"
+      validated: false
+    - provider_code: "6"
+      spec_code: "6"
+      expected_provider_name: "Closing Prints"
+      spec_name: "Closing Prints"
+      validated: false
+    - provider_code: "7"
+      spec_code: "7"
+      expected_provider_name: "Qualified Contingent Trade"
+      spec_name: "Qualified Contingent Trade"
+      validated: false
+    - provider_code: "8"
+      spec_code: "8"
+      expected_provider_name: "Placeholder For 611 Exempt"
+      spec_name: "Placeholder For 611 Exempt"
+      validated: false
+    - provider_code: "9"
+      spec_code: "9"
+      expected_provider_name: "Corrected Consolidated Close (per listing market)"
+      spec_name: "Corrected Consolidated Close (per listing market)"
+      validated: false

@@ -11,7 +11,9 @@ from tests.services import postgres_server, redis_server, scratch_database, unav
 
 FACT_AND_REF_TABLES = (
     "price_bars, fundamentals_asfiled, insider_txns, news_items, features, universe_snapshots, "
-    "feed_health, securities"
+    "feed_health, securities, trading_calendar, calendar_coverage, tbill_rates, "
+    "tbill_vintage_coverage, execution_references, halt_reference_requests, "
+    "halt_reference_symbol_sets, halt_references"
 )
 
 

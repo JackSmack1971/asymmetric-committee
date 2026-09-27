@@ -47,3 +47,20 @@ ingest:
     insider_trades: 1440
     news: 15
   lookback_days: 7
+
+# P6.3 market-data jobs (calendar, benchmark bars, DGS3MO, reference capture). These are NOT
+# freshness_sla_hours feeds: nothing here can become a stale-feed kill-switch trigger.
+reference_data:
+  cadence_minutes:
+    calendar: 1440
+    benchmarks: 1440
+    dgs3mo: 1440
+    references: 5      # polls for runs whose D0 open + delay has arrived
+    halt_sweep: 5      # resolves pending halt-reference requests
+  # Operational timeout only (never infers D0 or open/closed): wait this long after a run's
+  # commitment for calendar coverage before persisting `calendar_uncovered`.
+  calendar_coverage_wait_minutes: 4320
+  live_capture_grace_minutes: 10
+  halt_live_grace_minutes: 5
+  calendar_forward_days: 120
+  calendar_back_days: 800
