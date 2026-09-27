@@ -9,6 +9,11 @@ description: >
   one coherent commit boundary for a decision unit, stable identities/keys,
   idempotent reruns, replay from durable inputs, and tests that prove partial or
   failed writes cannot masquerade as completed decisions.
+  This skill owns durable committee/risk decision units and their replay; use
+  asymmetric-point-in-time-store for fact-table/as-of storage boundaries and
+  asymmetric-model-dispatch for provider-call, retry, cache, and task-outcome
+  behavior. Use those alongside this skill only when one change crosses both
+  boundaries.
 ---
 
 # Asymmetric Committee Atomic Decision Persistence Workflow

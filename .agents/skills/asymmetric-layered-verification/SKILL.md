@@ -8,6 +8,10 @@ description: >
   separate from service-backed gates, fail closed on required-service absence,
   preserve exact executed evidence, and never treat a partial test slice or
   historical result as proof that the full phase gate passed.
+  This skill owns verification design and evidence interpretation. During phase
+  delivery, use it when the task changes tests/gates or requires a deliberate
+  assessment of evidence strength; routine phase implementation remains owned
+  by asymmetric-phase-delivery.
 ---
 
 # Asymmetric Committee Layered Verification Workflow

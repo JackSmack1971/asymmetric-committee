@@ -9,6 +9,9 @@ description: >
   progress updates, or source-control recovery. Preserve unrelated dirty state,
   inspect diffs mechanically, and never absorb or publish changes without
   explicit authorization.
+  This skill owns Git and PR change management; use
+  asymmetric-phase-delivery for phase planning and product implementation and
+  combine them only when the requested work crosses into source-control actions.
 ---
 
 # Asymmetric Committee Phase Source-Control Workflow

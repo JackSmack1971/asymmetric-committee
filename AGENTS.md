@@ -4,7 +4,7 @@ The authoritative spec is `docs/asymmetric-committee-blueprint.md`. When code an
 
 ## Current state
 
-Track phase status in `docs/PROGRESS.md` (phase, gate status, open issues, decisions). Read it at the start of every session and update it at the end.
+Track phase status in `docs/PROGRESS.md` (phase, gate status, open issues, decisions). Before phase work, read the current status and relevant decisions/open issues; update the file when phase status, gate evidence, open issues, or project decisions change. For other tasks, consult only the relevant current-state entry when needed; do not add session-history entries.
 
 ## Stack
 

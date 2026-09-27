@@ -8,6 +8,11 @@ description: >
   evidence in docs/PROGRESS.md. Use when starting, resuming, implementing,
   reconciling, validating, or closing a P<n> phase. Do not use for an isolated
   bugfix that is not phase work, PR-only review, or general repository exploration.
+  This skill owns phase planning, implementation, and closure. Use
+  asymmetric-layered-verification when designing or changing gates, tests, or
+  acceptance evidence, and asymmetric-phase-source-control when the requested
+  work includes branch, commit, PR, or integration actions; a phase task may
+  combine these workflows when it crosses those boundaries.
 ---
 
 # Asymmetric Committee Phase Delivery

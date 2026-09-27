@@ -9,6 +9,10 @@ description: >
   only through store/as_of.py, prove no-look-ahead with as-of tests, preserve
   import-linter boundaries, and verify migration/schema behavior. Do not use for
   storage-independent application changes.
+  This skill owns fact storage, migrations, and as-of read semantics; use
+  asymmetric-decision-persistence for atomic committee/risk decision units and
+  replay. Combine them when decision persistence also changes fact-store or
+  point-in-time boundaries.
 ---
 
 # Asymmetric Committee Point-in-Time Store Workflow

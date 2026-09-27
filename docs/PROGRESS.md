@@ -1,6 +1,6 @@
 # Progress
 
-Read at the start of every session; update at the end. Spec: `docs/asymmetric-committee-blueprint.md` (§17 phases).
+For phase work, read the relevant current status, decisions, and open issues; update this file when phase status, gate evidence, open issues, or project decisions change. For other tasks, consult only the relevant entry when needed. Spec: `docs/asymmetric-committee-blueprint.md` (§17 phases).
 
 | Phase | Status | Gate | Branch | Notes |
 |---|---|---|---|---|

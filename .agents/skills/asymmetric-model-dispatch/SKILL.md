@@ -9,6 +9,10 @@ description: >
   handling, task status, or run completion semantics. Fail closed on missing
   cost/model metadata, never treat non-completed tasks as resumable success, and
   test with HTTP mocks/fixtures rather than live paid model calls.
+  This skill owns LLM provider calls, budgets, retries, cache identity, and
+  per-task dispatch outcomes; use asymmetric-decision-persistence for atomic
+  committee/risk decision records and run-level replay. Combine them only when
+  a change crosses from dispatch outcomes into persisted decision units.
 ---
 
 # Asymmetric Committee Reliable Model Dispatch Workflow
