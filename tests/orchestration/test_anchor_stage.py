@@ -7,6 +7,7 @@ remote" is a bare repository on disk.
 from __future__ import annotations
 
 import hashlib
+import os
 import subprocess
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -51,7 +52,18 @@ SHA = hashlib.sha256(b"c").hexdigest()
 
 
 def _git(cwd: Path, *args: str) -> str:
-    out = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, check=True)
+    env = os.environ.copy()
+    env.update(
+        {
+            "GIT_AUTHOR_NAME": "Test User",
+            "GIT_AUTHOR_EMAIL": "test@example.com",
+            "GIT_COMMITTER_NAME": "Test User",
+            "GIT_COMMITTER_EMAIL": "test@example.com",
+        }
+    )
+    out = subprocess.run(
+        ["git", "-C", str(cwd), *args], capture_output=True, text=True, check=True, env=env
+    )
     return out.stdout.strip()
 
 
