@@ -30,6 +30,11 @@ from execution.reference import AlpacaMarketData
 from execution.trade_conditions import load_provider_map
 from ingest.alpaca_trades import AlpacaTrades
 from ingest.backfill import build_sources
+from ingest.corporate_actions import (
+    AlpacaAssets,
+    AlpacaCorporateActions,
+    CorporateActionsIngestor,
+)
 from ingest.fred import AlfredClient
 from ingest.reference_data import ReferenceDataIngestor, benchmark_tickers
 from ingest.scheduled import FeedIngestor
@@ -182,5 +187,20 @@ def build_runtime(env: Mapping[str, str] | None = None) -> Runtime:
                 key_id=svc.env["ALPACA_API_KEY_ID"], secret=svc.env["ALPACA_API_SECRET"]
             ),
             provider_map=load_provider_map(),
+        ),
+        corporate_actions=CorporateActionsIngestor(
+            svc.engine,
+            actions=AlpacaCorporateActions(
+                key_id=svc.env["ALPACA_API_KEY_ID"], secret=svc.env["ALPACA_API_SECRET"]
+            ),
+            assets=AlpacaAssets(
+                key_id=svc.env["ALPACA_API_KEY_ID"],
+                secret=svc.env["ALPACA_API_SECRET"],
+                env=dict(svc.env),
+            ),
+            edgar=sources.edgar,
+            lookback_days=ref_cfg.corporate_actions_lookback_days,
+            batch_size=ref_cfg.corporate_actions_batch_size,
+            gap_sessions=ref_cfg.delisting_gap_sessions,
         ),
     )

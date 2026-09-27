@@ -335,6 +335,11 @@ class ReferenceDataConfig(_Cfg):
     halt_live_grace_minutes: PosFloat
     calendar_forward_days: int = Field(ge=30, le=730)  # sessions needed ahead for 63-day horizons
     calendar_back_days: int = Field(ge=1, le=3650)
+    # P6.4: trailing process-date window each action poll re-reads (coverage is per poll).
+    corporate_actions_lookback_days: int = Field(default=30, ge=1, le=365)
+    corporate_actions_batch_size: int = Field(default=50, ge=1, le=500)
+    # Confirmed sessions without a bar (asset still active) before SUSPECTED_GAP. Never a default.
+    delisting_gap_sessions: int = Field(default=10, ge=1)
 
 
 class PipelineConfig(_Cfg):

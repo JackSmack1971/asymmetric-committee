@@ -57,6 +57,9 @@ reference_data:
     dgs3mo: 1440
     references: 5      # polls for runs whose D0 open + delay has arrived
     halt_sweep: 5      # resolves pending halt-reference requests
+    corporate_actions: 1440  # P6.4 action poll + per-security coverage (never an SLA feed)
+    listing_status: 1440     # P6.4 Alpaca asset status + Form 25 for inactive issuers
+    delistings: 1440         # P6.4 evidence-hierarchy derivation
   # Operational timeout only (never infers D0 or open/closed): wait this long after a run's
   # commitment for calendar coverage before persisting `calendar_uncovered`.
   calendar_coverage_wait_minutes: 4320
@@ -64,3 +67,6 @@ reference_data:
   halt_live_grace_minutes: 5
   calendar_forward_days: 120
   calendar_back_days: 800
+  corporate_actions_lookback_days: 30
+  corporate_actions_batch_size: 50
+  delisting_gap_sessions: 10
