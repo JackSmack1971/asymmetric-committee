@@ -46,6 +46,10 @@ def test_a_raw_db_import_in_risk_is_rejected(tmp_path: Path, bad_import: str) ->
         (tmp_path / pkg).mkdir()
         (tmp_path / pkg / "__init__.py").write_text("")
     (tmp_path / "store" / "_tables.py").write_text("")
+    (tmp_path / "evaluation" / "scorable.py").write_text("")
+    (tmp_path / "evaluation" / "anchoring.py").write_text("")
+    (tmp_path / "evaluation" / "calendar_rules.py").write_text("")
+    (tmp_path / "evaluation" / "tbill_rules.py").write_text("")
     (tmp_path / "risk" / "sizing.py").write_text(bad_import + "\n")
     result = _lint(tmp_path)
     assert result.returncode != 0
@@ -59,6 +63,10 @@ def _tree(tmp_path: Path, files: dict[str, str]) -> None:
         (tmp_path / pkg).mkdir()
         (tmp_path / pkg / "__init__.py").write_text("")
     (tmp_path / "store" / "_tables.py").write_text("")
+    (tmp_path / "evaluation" / "scorable.py").write_text("")
+    (tmp_path / "evaluation" / "anchoring.py").write_text("")
+    (tmp_path / "evaluation" / "calendar_rules.py").write_text("")
+    (tmp_path / "evaluation" / "tbill_rules.py").write_text("")
     (tmp_path / "store" / "write.py").write_text("")
     for name, body in files.items():
         (tmp_path / name).write_text(body)
@@ -81,6 +89,26 @@ def test_sink_is_the_only_orchestration_writer(tmp_path: Path) -> None:
 )
 def test_other_modules_cannot_write_or_open_the_db(tmp_path: Path, path: str, body: str) -> None:
     _tree(tmp_path, {path: body})
+    result = _lint(tmp_path)
+    assert result.returncode != 0
+    assert "BROKEN" in result.stdout
+
+
+@pytest.mark.skipif(LINT is None, reason="import-linter not installed")
+@pytest.mark.parametrize(
+    "body",
+    [
+        "import sqlalchemy\n",
+        "from store import as_of\n",
+        "from store import scoring_read\n",
+        "from orchestration import sink\n",
+    ],
+)
+def test_the_scorability_gate_stays_pure(tmp_path: Path, body: str) -> None:
+    _tree(tmp_path, {"evaluation/scorable.py": body})
+    for name in ("as_of.py", "scoring_read.py"):
+        (tmp_path / "store" / name).write_text("")
+    (tmp_path / "orchestration" / "sink.py").write_text("")
     result = _lint(tmp_path)
     assert result.returncode != 0
     assert "BROKEN" in result.stdout

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime
+from types import SimpleNamespace
 
-from opentimestamps.core.notary import PendingAttestation
+from opentimestamps.core.notary import BitcoinBlockHeaderAttestation, PendingAttestation
 from opentimestamps.core.serialize import BytesSerializationContext
 
 from contracts.commitment import CommitmentMaterial, commitment_hash
@@ -70,3 +71,25 @@ def material_for(
         committed_at=committed_at,
         anchor=anchor,
     )
+
+
+class BlockHeaders:
+    """A stand-in block-header source: every height returns one merkle root and time."""
+
+    def __init__(self, root: bytes | None, time: int) -> None:
+        self.root, self.time = root, time
+
+    def header(self, height: int) -> object:
+        return SimpleNamespace(hashMerkleRoot=self.root, nTime=self.time)
+
+
+def confirmed_proof(sha256_hex: str, *, height: int = 700_000) -> tuple[bytes, bytes]:
+    """A proof upgraded to a Bitcoin attestation, and the merkle root a header must carry."""
+    file, node = anchoring.new_stamp(bytes.fromhex(sha256_hex), bytes(range(16)))
+    node.merge(
+        anchoring.parse_fragment(calendar_reply(node.msg, PendingAttestation(CALENDAR)), node.msg)
+    )
+    anchoring.upgrade(
+        file, lambda _uri, msg: calendar_reply(msg, BitcoinBlockHeaderAttestation(height))
+    )
+    return anchoring.dumps(file), node.msg

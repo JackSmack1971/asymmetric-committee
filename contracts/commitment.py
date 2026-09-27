@@ -18,7 +18,7 @@ import json
 import math
 from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
-from enum import Enum
+from enum import Enum, StrEnum
 from typing import Any
 from uuid import UUID
 
@@ -28,6 +28,8 @@ from contracts.models import (
     CommitmentAnchor,
     CommitteeDecisionRecord,
     Contract,
+    DecisionCommitment,
+    KillSwitchEvent,
     PortfolioSnapshot,
     RunRecord,
     Sha256Hex,
@@ -38,6 +40,29 @@ COMMITMENT_VERSION = "commitment_v1"
 
 class CommitmentIntegrityError(RuntimeError):
     """A recomputed commitment does not match what was stored or anchored. Never auto-retried."""
+
+
+class MaterialDefectKind(StrEnum):
+    """Why stored rows could not be rebuilt into the committed material (kept, never collapsed)."""
+
+    SNAPSHOT_MISSING = "snapshot_missing"
+    SNAPSHOT_INVALID = "snapshot_invalid"
+    DECISION_ENTITY_TOKEN_MISSING = "decision_entity_token_missing"
+    DECISION_ROW_INVALID = "decision_row_invalid"
+
+
+class MaterialDefectError(CommitmentIntegrityError):
+    """A stored row cannot be rebuilt into ``commitment_v1`` material; ``kind`` says why."""
+
+    def __init__(self, kind: MaterialDefectKind, detail: str) -> None:
+        super().__init__(detail)
+        self.kind = kind
+        self.detail = detail
+
+
+class MaterialDefect(Contract):
+    kind: MaterialDefectKind
+    detail: str
 
 
 class CommitmentMaterial(Contract):
@@ -140,3 +165,20 @@ def verify_material(material: CommitmentMaterial) -> str:
             f"{recomputed[:12]}"
         )
     return recomputed
+
+
+class ScoringEvidence(Contract):
+    """Everything the scorability gate needs, read in one snapshot; nothing here is trusted.
+
+    Absent pieces stay absent (``None``/empty) and rows that could not be rebuilt are listed in
+    ``defects`` with their kind, so refusal classification never depends on which query failed.
+    ``anchor.verified_at`` is carried as evidence only.
+    """
+
+    run: RunRecord | None = None
+    commitment: DecisionCommitment | None = None
+    decisions: tuple[CommitteeDecisionRecord, ...] = ()
+    snapshot: PortfolioSnapshot | None = None
+    anchor: CommitmentAnchor | None = None
+    kill_switch_events: tuple[KillSwitchEvent, ...] = ()
+    defects: tuple[MaterialDefect, ...] = ()
