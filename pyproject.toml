@@ -13,6 +13,9 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "httpx>=0.27",
     "pyyaml>=6.0.3",
+    "opentimestamps>=0.4.5",
+    "numpy>=2.5.3",
+    "scipy>=1.18.1",
 ]
 
 [dependency-groups]
@@ -26,6 +29,8 @@ dev = [
     "celery-types>=0.22",
     "types-pyyaml>=6.0.12.20260906",
     "import-linter>=2.15",
+    "statsmodels>=0.15.0",
+    "scipy-stubs>=1.18.1.1",
 ]
 
 [tool.uv]
@@ -34,7 +39,8 @@ package = false
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = ["dashboard", "docs"]
+# .agents/ holds the owner's agent skill scripts, not project code (see PROGRESS).
+extend-exclude = ["dashboard", "docs", ".agents"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "TID"]
@@ -51,6 +57,11 @@ python_version = "3.12"
 strict = true
 exclude = ["dashboard/"]
 
+# opentimestamps and python-bitcoinlib ship no type information.
+[[tool.mypy.overrides]]
+module = ["opentimestamps.*", "bitcoin.*"]
+ignore_missing_imports = true
+
 # Invariant 2: downstream code reads the DB only through store.as_of. It may not touch SQL,
 # drivers or store internals; decision-making code may not write facts or open connections.
 [tool.importlinter]
@@ -63,20 +74,53 @@ include_external_packages = true
 [[tool.importlinter.contracts]]
 name = "Downstream code reads the DB only through store.as_of"
 type = "forbidden"
-source_modules = ["agents", "features", "gate", "committee", "risk", "evaluation", "universe"]
+source_modules = [
+    "agents", "features", "gate", "committee", "risk", "evaluation", "universe", "execution",
+]
 forbidden_modules = ["sqlalchemy", "psycopg", "store._tables", "store.migrate"]
 allow_indirect_imports = true
 
 [[tool.importlinter.contracts]]
 name = "Decision code neither writes facts nor opens connections"
 type = "forbidden"
-source_modules = ["agents", "gate", "committee", "risk"]
+source_modules = ["agents", "gate", "committee", "risk", "execution"]
 forbidden_modules = ["store.write", "store.db", "ingest"]
+allow_indirect_imports = true
+
+# P6.2: the scorability gate is pure; persistence reads live in store.scoring_read. P6.3: so are
+# the calendar and T-bill rules (they take rows the store returned, never a connection).
+[[tool.importlinter.contracts]]
+name = "The scorability gate is pure (no store, orchestration or database)"
+type = "forbidden"
+source_modules = [
+    "evaluation.scorable", "evaluation.anchoring", "evaluation.calendar_rules",
+    "evaluation.tbill_rules",
+]
+forbidden_modules = ["store", "orchestration", "ingest", "sqlalchemy", "psycopg"]
+allow_indirect_imports = true
+
+# P5: run outputs are written by orchestration/sink.py and nowhere else in orchestration.
+[[tool.importlinter.contracts]]
+name = "Only orchestration.sink writes run outputs"
+type = "forbidden"
+source_modules = ["orchestration"]
+forbidden_modules = ["store.write"]
+allow_indirect_imports = true
+ignore_imports = ["orchestration.sink -> store.write"]
+unmatched_ignore_imports_alerting = "none"
+
+# P5: orchestration reads fact tables only through store.as_of (the loader), never table objects.
+[[tool.importlinter.contracts]]
+name = "Orchestration reads facts only through store.as_of"
+type = "forbidden"
+source_modules = ["orchestration"]
+forbidden_modules = ["store._tables", "store.migrate"]
 allow_indirect_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --cov --cov-report=term-missing"
+addopts = "-q --cov --cov-report=term-missing -m \"not sim\""
+markers = ["sim: fixed-seed statistical simulations (slow); select alone with -m sim"]
 
 [tool.coverage.run]
 omit = ["tests/*"]

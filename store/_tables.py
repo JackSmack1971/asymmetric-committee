@@ -11,18 +11,22 @@ from typing import Any
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Column,
     Date,
     DateTime,
     Double,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
+    LargeBinary,
     MetaData,
     Table,
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 
@@ -43,6 +47,15 @@ def _bitemporal() -> list[Column[Any]]:
     ]
 
 
+def _bitemporal_no_version() -> list[Column[Any]]:
+    """§4.2 columns for a table whose ``source_version`` is part of its primary key."""
+    return [
+        _ts("event_time"),
+        _ts("available_at"),
+        Column("ingested_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    ]
+
+
 def _sid(*, nullable: bool = False) -> Column[Any]:
     return Column("security_id", Integer, ForeignKey("securities.security_id"), nullable=nullable)
 
@@ -54,13 +67,25 @@ securities = Table(
     metadata,
     Column("security_id", Integer, primary_key=True, autoincrement=True),
     Column("ticker", Text, nullable=False),
-    Column("cik", BigInteger, nullable=False),
+    Column("cik", BigInteger, nullable=True),
     Column("name", Text, nullable=False),
     Column("sector", Text),
     Column("industry", Text),
     Column("listed_from", Date),
     Column("listed_to", Date),
+    Column("kind", Text, nullable=False, server_default="equity"),
     UniqueConstraint("cik", "ticker", name="uq_securities_cik_ticker"),
+    # An equity has a real CIK; SPY and the sector ETFs have none (no synthetic identifier, §4.3).
+    CheckConstraint(
+        "(kind = 'equity' AND cik IS NOT NULL) OR (kind = 'etf' AND cik IS NULL)",
+        name="ck_securities_kind_cik",
+    ),
+    Index(
+        "uq_securities_reference_ticker",
+        "ticker",
+        unique=True,
+        postgresql_where=text("kind <> 'equity'"),
+    ),
 )
 
 # --- fact tables (bitemporal) ----------------------------------------------------------------
@@ -207,6 +232,8 @@ runs = Table(
     Column("status", Text, nullable=False),
     _ts("started_at"),
     _ts("ended_at", nullable=True),
+    Column("status_reason", Text),
+    Column("total_cost_usd", Double, nullable=False, server_default="0"),
 )
 
 
@@ -240,10 +267,10 @@ agent_verdicts = Table(
     _sid(),
     Column("agent", Text, nullable=False),
     Column("verdict", JSONB, nullable=False),
-    Column("tokens_in", Integer, nullable=False),
-    Column("tokens_out", Integer, nullable=False),
+    Column("tokens_in", Integer),
+    Column("tokens_out", Integer),
     Column("cost_usd", Double, nullable=False),
-    Column("latency_ms", Integer, nullable=False),
+    Column("latency_ms", Integer),
     UniqueConstraint("run_id", "security_id", "agent", name="uq_agent_verdicts"),
 )
 
@@ -252,12 +279,61 @@ committee_decisions = Table(
     metadata,
     _run_id(),
     _sid(),
+    Column("horizon", Integer, nullable=False),
+    # Needed to rebuild the committed CommitteeDecision and recompute its hash; NULL on rows that
+    # predate 0006, which therefore cannot be verified (fail closed).
+    Column("entity_token", Text),
     Column("pooled_p", Double, nullable=False),
+    Column("pooled_logit", Double),
     Column("dispersion", Double, nullable=False),
+    Column("sizing_mode", Text),
+    Column("bear_severity", Text),
+    Column("weights", JSONB, nullable=False),  # per-agent pooling weights (§7), not portfolio
     Column("target_weight", Double, nullable=False),
     Column("cio_action", Text),
     Column("rationale", Text),
-    UniqueConstraint("run_id", "security_id", name="uq_committee_decisions"),
+    UniqueConstraint("run_id", "security_id", "horizon", name="uq_committee_decisions"),
+)
+
+# Final book after the CIO; cash is the stored residual (§8.1).
+portfolio_snapshots = Table(
+    "portfolio_snapshots",
+    metadata,
+    Column("run_id", UUID(as_uuid=True), ForeignKey("runs.run_id"), primary_key=True),
+    _ts("as_of"),
+    Column("cash_weight", Double, nullable=False),
+    Column("book", JSONB, nullable=False),
+    Column("cio", JSONB),
+)
+
+# Failed or aborted tasks. dedupe_key makes a replayed step a no-op.
+dlq_records = Table(
+    "dlq_records",
+    metadata,
+    Column("dlq_id", BigInteger, primary_key=True, autoincrement=True),
+    _run_id(),
+    _ts("as_of"),
+    Column("agent", Text, nullable=False),
+    Column("error_type", Text, nullable=False),
+    Column("payload", JSONB, nullable=False),
+    Column("dedupe_key", Text, nullable=False),
+    UniqueConstraint("run_id", "dedupe_key", name="uq_dlq_records"),
+)
+
+# Kill-switch halts (§9). The run itself goes PARTIAL; this row carries the detail.
+kill_switch_events = Table(
+    "kill_switch_events",
+    metadata,
+    Column("event_id", BigInteger, primary_key=True, autoincrement=True),
+    _run_id(),
+    _ts("triggered_at"),
+    Column("trigger", Text, nullable=False),
+    Column("daily_loss", Double),
+    Column("peak_drawdown", Double),
+    Column("cancelled_order_ids", ARRAY(Text), nullable=False),
+    Column("flattened", Boolean, nullable=False),
+    Column("dedupe_key", Text, nullable=False),
+    UniqueConstraint("run_id", "dedupe_key", name="uq_kill_switch_events"),
 )
 
 # Append-only: a trigger rejects UPDATE and DELETE (invariant 5).
@@ -267,6 +343,38 @@ decision_commitments = Table(
     Column("run_id", UUID(as_uuid=True), ForeignKey("runs.run_id"), primary_key=True),
     Column("sha256", Text, nullable=False),
     Column("committed_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    UniqueConstraint("run_id", "sha256", name="uq_decision_commitments_run_sha"),
+)
+
+# External anchor of the commitment (§12.2). The hash never changes; the proof is upgraded later.
+commitment_anchors = Table(
+    "commitment_anchors",
+    metadata,
+    Column("run_id", UUID(as_uuid=True), ForeignKey("runs.run_id"), primary_key=True),
+    Column("sha256", Text, nullable=False),
+    Column("ots_proof", LargeBinary),
+    Column("git_commit", Text),
+    _ts("anchored_at"),
+    _ts("verified_at", nullable=True),
+    # An anchor can only ever be of the run's own commitment hash.
+    ForeignKeyConstraint(
+        ["run_id", "sha256"],
+        ["decision_commitments.run_id", "decision_commitments.sha256"],
+        name="fk_commitment_anchors_commitment",
+    ),
+)
+
+# Append-only audit of operator resets (pre-commitment runs only). What was cleared is kept here.
+run_resets = Table(
+    "run_resets",
+    metadata,
+    Column("reset_id", BigInteger, primary_key=True, autoincrement=True),
+    Column("run_id", UUID(as_uuid=True), ForeignKey("runs.run_id"), nullable=False),
+    _ts("reset_at"),
+    Column("actor", Text, nullable=False),
+    Column("reason", Text, nullable=False),
+    Column("prior_status", Text, nullable=False),
+    Column("cleared", JSONB, nullable=False),
 )
 
 orders = Table(
@@ -280,6 +388,17 @@ orders = Table(
     Column("limit_price", Double),
     Column("status", Text, nullable=False),
     _ts("submitted_at"),
+    # P5 step 4 execution evidence (§9): one row per broker order, updated as the broker reports.
+    Column("client_order_id", Text, nullable=False),
+    Column("kind", Text, nullable=False),
+    Column("filled_qty", Double, nullable=False),
+    Column("decision_price", Double, nullable=False),
+    Column("reference_price", Double, nullable=False),
+    Column("reference_source", Text, nullable=False),
+    Column("fill_price", Double),
+    Column("slippage_bps", Double),
+    _ts("filled_at", nullable=True),
+    UniqueConstraint("client_order_id", name="orders_client_order_id_key"),
 )
 
 fills = Table(
@@ -320,6 +439,149 @@ agent_scores = Table(
     UniqueConstraint("agent", "model_served", "window", "computed_at", name="uq_agent_scores"),
 )
 
+# --- market-data foundations (P6.3) ------------------------------------------------------------
+
+# Append-only calendar revisions. ``event_time`` is the session open; a revision is a new row.
+trading_calendar = Table(
+    "trading_calendar",
+    metadata,
+    Column("session_date", Date, primary_key=True),
+    Column("source_version", Text, primary_key=True),
+    _ts("open_at"),
+    _ts("close_at"),
+    *_bitemporal_no_version(),
+    Index("ix_trading_calendar_available_at", "available_at"),
+)
+
+# A fetched range whose sessions were written in the same transaction (see contracts.market_data).
+calendar_coverage = Table(
+    "calendar_coverage",
+    metadata,
+    Column("source", Text, primary_key=True),
+    Column("range_start", Date, primary_key=True),
+    Column("range_end", Date, primary_key=True),
+    Column("source_version", Text, primary_key=True),
+    _ts("available_at"),
+    Column("ingested_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("session_count", Integer, nullable=False),
+    Column("sessions_sha256", Text, nullable=False),
+    Index("ix_calendar_coverage_available_at", "available_at"),
+)
+
+# DGS3MO vintages. NAMED EXCEPTION to the available_at rule: ``vintage_date`` (ALFRED
+# realtime_start) is date-granular evidence; no timestamp is invented (§4.3).
+tbill_rates = Table(
+    "tbill_rates",
+    metadata,
+    Column("series", Text, primary_key=True),
+    Column("observation_date", Date, primary_key=True),
+    Column("vintage_date", Date, primary_key=True),
+    Column("yield_pct", Double, nullable=False),
+    Column("ingested_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("source_version", Text, nullable=False),
+)
+
+tbill_vintage_coverage = Table(
+    "tbill_vintage_coverage",
+    metadata,
+    Column("series", Text, primary_key=True),
+    Column("source_version", Text, primary_key=True),
+    _ts("established_at"),
+    Column("earliest_vintage", Date, nullable=False),
+    Column("latest_vintage", Date, nullable=False),
+    Column("vintage_count", Integer, nullable=False),
+    Column("vintage_dates_sha256", Text, nullable=False),
+    Column("ingested_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+)
+
+# Run-scoped, insert-only reference evidence for scoring (§4.6). A resolved row carries a price and
+# its source; an unresolved row carries a reason. No daily price can appear here.
+execution_references = Table(
+    "execution_references",
+    metadata,
+    Column("run_id", UUID(as_uuid=True), ForeignKey("runs.run_id"), primary_key=True),
+    Column("symbol_ref", Text, primary_key=True),
+    _ts("ref_time", nullable=True),
+    Column("mode", Text, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("reason", Text),
+    Column("price", Double),
+    Column("source", Text),
+    _ts("trade_time", nullable=True),
+    Column("trade_tape", Text),
+    Column("trade_conditions", ARRAY(Text), nullable=False, server_default="{}"),
+    Column("trade_id", Text),
+    Column("session_date", Date, nullable=True),
+    _ts("available_at"),
+    Column("ingested_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("source_version", Text, nullable=False),
+    CheckConstraint(
+        "(status = 'resolved' AND price IS NOT NULL AND source IS NOT NULL AND reason IS NULL "
+        "AND ref_time IS NOT NULL AND session_date IS NOT NULL) "
+        "OR (status = 'unresolved' AND price IS NULL AND source IS NULL AND reason IS NOT NULL "
+        "AND ((ref_time IS NOT NULL AND session_date IS NOT NULL) "
+        "OR reason = 'calendar_uncovered'))",
+        name="ck_execution_references_status",
+    ),
+)
+
+# Written in the halt transaction; never holds symbols (the sweeper reconstructs them).
+halt_reference_requests = Table(
+    "halt_reference_requests",
+    metadata,
+    Column("run_id", UUID(as_uuid=True), ForeignKey("runs.run_id"), primary_key=True),
+    Column("trigger", Text, primary_key=True),
+    _ts("tau"),
+    Column("status", Text, nullable=False),
+    _ts("requested_at"),
+    Column("ingested_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("source_version", Text, nullable=False),
+    CheckConstraint("status = 'symbols_pending'", name="ck_halt_reference_requests_status"),
+)
+
+halt_reference_symbol_sets = Table(
+    "halt_reference_symbol_sets",
+    metadata,
+    Column("run_id", UUID(as_uuid=True), ForeignKey("runs.run_id"), primary_key=True),
+    Column("trigger", Text, primary_key=True),
+    Column("symbols", JSONB, nullable=False),
+    Column("symbol_count", Integer, nullable=False),
+    Column("symbols_sha256", Text, nullable=False),
+    Column("source", Text, nullable=False),
+    Column("source_version", Text, nullable=False),
+    _ts("resolved_at"),
+    Column("ingested_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    CheckConstraint("symbol_count > 0", name="ck_halt_symbol_sets_nonempty"),
+)
+
+halt_references = Table(
+    "halt_references",
+    metadata,
+    Column("run_id", UUID(as_uuid=True), ForeignKey("runs.run_id"), primary_key=True),
+    Column("trigger", Text, primary_key=True),
+    Column("symbol_ref", Text, primary_key=True),
+    _ts("observed_at"),
+    Column("lag_seconds", Double, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("reason", Text),
+    Column("price", Double),
+    Column("source", Text),
+    _ts("trade_time", nullable=True),
+    Column("trade_tape", Text),
+    Column("trade_conditions", ARRAY(Text), nullable=False, server_default="{}"),
+    Column("trade_id", Text),
+    Column("symbol_set_source", Text, nullable=False),
+    Column("symbol_set_version", Text, nullable=False),
+    _ts("available_at"),
+    Column("ingested_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("source_version", Text, nullable=False),
+    CheckConstraint(
+        "(status = 'resolved' AND price IS NOT NULL AND source IS NOT NULL AND reason IS NULL) "
+        "OR (status = 'unresolved' AND price IS NULL AND source IS NULL AND reason IS NOT NULL)",
+        name="ck_halt_references_status",
+    ),
+)
+
 FACT_TABLES: tuple[Table, ...] = (
     price_bars,
     fundamentals_asfiled,
@@ -327,6 +589,19 @@ FACT_TABLES: tuple[Table, ...] = (
     news_items,
     features,
     universe_snapshots,
+    trading_calendar,
 )
 HYPERTABLES: tuple[Table, ...] = (price_bars, features)
-IMMUTABLE_TABLES: tuple[Table, ...] = (fundamentals_asfiled, decision_commitments)
+IMMUTABLE_TABLES: tuple[Table, ...] = (
+    fundamentals_asfiled,
+    decision_commitments,
+    run_resets,
+    trading_calendar,
+    calendar_coverage,
+    tbill_rates,
+    tbill_vintage_coverage,
+    execution_references,
+    halt_reference_requests,
+    halt_reference_symbol_sets,
+    halt_references,
+)

@@ -10,11 +10,12 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeGuard
 from uuid import UUID
 
 from pydantic import ValidationError
@@ -55,11 +56,14 @@ class BudgetExceededError(RuntimeError):
 class RunBudget:
     """Thread-safe cumulative cost counter with a hard ceiling."""
 
-    def __init__(self, max_usd: float) -> None:
+    def __init__(self, max_usd: float, spent_usd: float = 0.0) -> None:
+        """``spent_usd`` carries earlier attempts' spend when a run is resumed."""
         if max_usd <= 0:
             raise ValueError("max_usd must be positive")
+        if spent_usd < 0:
+            raise ValueError("spent_usd must not be negative")
         self.max_usd = max_usd
-        self._spent = 0.0
+        self._spent = spent_usd
         self._lock = threading.Lock()
 
     @property
@@ -108,6 +112,20 @@ class DiscardReason(StrEnum):
 
 
 @dataclass(frozen=True)
+class CallTelemetry:
+    """What one verdict actually cost, measured per call and summed over its repair attempts.
+
+    ``None`` means unknown, never zero: a cache hit made no call (no tokens, no latency; billed
+    ``0.0``), and a provider that reported only ``usage.cost`` gives no token counts.
+    """
+
+    cost_usd: float
+    tokens_in: int | None
+    tokens_out: int | None
+    latency_ms: int | None
+
+
+@dataclass(frozen=True)
 class AgentCallResult:
     """A verdict, or ``None`` when discarded as *invalid* (a failed call, never persisted)."""
 
@@ -116,6 +134,7 @@ class AgentCallResult:
     calls: int
     discard_reason: DiscardReason | None = None
     cache_hit: bool = False
+    telemetry: CallTelemetry | None = None  # set whenever ``verdict`` is
 
 
 def verdict_valid(mode: RunMode, as_of: datetime, served: ServedModel) -> bool:
@@ -130,6 +149,10 @@ def unprovided_evidence(
 ) -> tuple[EvidenceRef, ...]:
     """Citations that do not name a row the agent was actually shown."""
     return tuple(e for e in evidence if (e.source, e.row_id) not in partition.evidence)
+
+
+def _is_count(value: object) -> TypeGuard[int]:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 def _served_model(models: ModelsConfig, response_model: str) -> ServedModel:
@@ -258,12 +281,17 @@ def run_agent_call(
                 prompt_version=prompt_version,
             )
         ):
-            return AgentCallResult(hit, 0.0, 0, cache_hit=True)
+            return AgentCallResult(
+                hit, 0.0, 0, cache_hit=True, telemetry=CallTelemetry(0.0, None, None, None)
+            )
     messages: list[Message] = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": partition.text},
     ]
     cost = 0.0
+    tokens_in: int | None = 0
+    tokens_out: int | None = 0
+    latency_s = 0.0
     reason = DiscardReason.UNPARSEABLE
 
     def dead_letter(error: str) -> None:
@@ -282,14 +310,20 @@ def run_agent_call(
         if budget is not None and budget.exceeded:
             dead_letter("budget_exceeded")
             raise BudgetExceededError("run budget already exhausted")
+        began = time.perf_counter()
         try:
             response = client.complete(messages)
         except LLMTransientError as e:
             dead_letter(str(e))
             return AgentCallResult(None, cost, attempt, DiscardReason.DEAD_LETTERED)
+        latency_s += time.perf_counter() - began
         served = _served_model(models, response.model)
         call_usd = served.call_cost(response.usage).usd
         cost += call_usd
+        usage = response.usage or {}
+        p_tok, c_tok = usage.get("prompt_tokens"), usage.get("completion_tokens")
+        tokens_in = tokens_in + p_tok if tokens_in is not None and _is_count(p_tok) else None
+        tokens_out = tokens_out + c_tok if tokens_out is not None and _is_count(c_tok) else None
         if budget is not None:
             try:
                 budget.charge(call_usd)
@@ -316,6 +350,7 @@ def run_agent_call(
                     ),
                     cost,
                     attempt + 1,
+                    telemetry=CallTelemetry(cost, tokens_in, tokens_out, round(latency_s * 1000)),
                 )
             ids = ", ".join(f"{e.source.value}:{e.row_id}" for e in missing)
             problem, reason = (

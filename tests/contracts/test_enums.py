@@ -31,11 +31,11 @@ from contracts.enums import (
         ),
         (RunMode, {"live", "backtest", "ablation"}),
         (CioAction, {"approve", "veto", "flag_for_review"}),
-        (Horizon, {21, 63}),
+        (Horizon, {5, 21, 63}),
         (
             RunStatus,
             {"PENDING", "INGEST_OK", "FEATURES_OK", "GATED", "AGENTS_OK", "COMMITTED",
-             "EXECUTED", "SCORED", "FAILED", "PARTIAL"},
+             "ANCHORED", "EXECUTED", "SCORED", "FAILED", "PARTIAL"},
         ),
     ],
 )  # fmt: skip
@@ -49,7 +49,7 @@ def test_voting_agents_exclude_non_voters() -> None:
 
 
 def test_happy_path() -> None:
-    path = list(RunStatus)[:8]
+    path = list(RunStatus)[:9]
     for src, dst in pairwise(path):
         assert can_transition(src, dst)
 
@@ -72,6 +72,14 @@ def test_terminal_states_are_final(src: RunStatus) -> None:
 def test_no_skipping() -> None:
     assert not can_transition(RunStatus.PENDING, RunStatus.COMMITTED)
     assert not can_transition(RunStatus.GATED, RunStatus.PENDING)
+
+
+def test_anchoring_precedes_execution() -> None:
+    assert not can_transition(RunStatus.COMMITTED, RunStatus.EXECUTED)
+    assert can_transition(RunStatus.COMMITTED, RunStatus.ANCHORED)
+    assert can_transition(RunStatus.ANCHORED, RunStatus.EXECUTED)
+    assert can_transition(RunStatus.ANCHORED, RunStatus.SCORED)  # non-live runs skip execution
+    assert can_transition(RunStatus.EXECUTED, RunStatus.PARTIAL)  # the audited halt path
 
 
 def test_only_completed_short_circuits() -> None:

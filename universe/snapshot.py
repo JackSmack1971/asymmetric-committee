@@ -26,6 +26,20 @@ from store.write import insert_universe_snapshot
 
 SHARES_CONCEPT = "dei:EntityCommonStockSharesOutstanding"
 ADV_DAYS = 20
+STOP_WORD_ALIASES = frozenset(
+    {
+        "GENERAL",
+        "TEXAS",
+        "AMERICAN",
+        "UNITED",
+        "NATIONAL",
+        "FIRST",
+        "GLOBAL",
+        "INTERNATIONAL",
+        "APPLIED",
+        "PACIFIC",
+    }
+)
 
 
 def month_ends(start: date, end: date) -> list[date]:
@@ -135,11 +149,15 @@ def colloquial_short_name(name: str) -> str | None:
     """First word of the legal-suffix-stripped name (``"Zephyr Dynamics Corp."`` -> ``"Zephyr"``).
 
     Prose uses it alone, and the identity aliases (full and stripped name) do not cover it.
-    ``None`` for single-word names: the stripped name already is the short name.
+    ``None`` for single-word names (the stripped name already is the short name) and for first
+    words in ``STOP_WORD_ALIASES``: masking "Texas" alone would over-mask ordinary prose, so
+    those names are masked only as the multi-word stripped name, or by an explicit brand alias.
     """
     stripped = (short_names(name) or [name.strip()])[0]
     words = stripped.split()
-    return words[0] if len(words) > 1 and len(words[0]) >= 3 else None
+    if len(words) < 2 or len(words[0]) < 3 or words[0].upper() in STOP_WORD_ALIASES:
+        return None
+    return words[0]
 
 
 def alias_coverage_gaps(

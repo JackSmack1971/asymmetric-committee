@@ -44,6 +44,14 @@ def test_every_section_4_3_table_exists(pg_engine: Engine) -> None:
         "outcomes",
         "agent_scores",
         "feed_health",
+        "trading_calendar",
+        "calendar_coverage",
+        "tbill_rates",
+        "tbill_vintage_coverage",
+        "execution_references",
+        "halt_reference_requests",
+        "halt_reference_symbol_sets",
+        "halt_references",
     }
     assert spec <= names
 
@@ -57,8 +65,10 @@ def test_fact_tables_are_bitemporal_and_indexed(pg_engine: Engine, table: Table)
     indexed = [tuple(ix["column_names"]) for ix in insp.get_indexes(table.name)]
     if "security_id" in cols:
         assert ("security_id", "available_at") in indexed
-    else:  # news: many securities per row
-        assert ("available_at",) in indexed and ("security_ids",) in indexed
+    else:  # news (many securities per row) and the market-wide calendar
+        assert ("available_at",) in indexed
+        if "security_ids" in cols:
+            assert ("security_ids",) in indexed
 
 
 def test_fundamentals_are_insert_only(db: Connection) -> None:

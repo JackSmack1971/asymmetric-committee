@@ -17,13 +17,18 @@ from contracts.enums import (
     VOTING_AGENTS,
     AgentName,
     BearSeverity,
+    BrokerOrderStatus,
     CioAction,
     DataSufficiency,
     FeedName,
     Horizon,
+    KillTrigger,
+    OrderKind,
     OrderSide,
+    ReferenceSource,
     RunMode,
     RunStatus,
+    SizingMode,
     Stage,
     Stance,
 )
@@ -270,6 +275,86 @@ class CommitteeDecision(Contract):
         return self
 
 
+class HorizonPool(Contract):
+    """Pooled logit for one horizon (§7.1). ``weights`` are voting agents only."""
+
+    horizon: Horizon
+    logit: Finite  # L = sum_a w_a * z_a, before the stacker
+    lambda_t: Probability  # shrinkage toward equal weights actually applied
+    dispersion: NonNegative  # std of the agent logits
+    weights: tuple[AgentWeight, ...] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _voting_weights(self) -> Self:
+        agents = [w.agent for w in self.weights]
+        if len(agents) != len(set(agents)) or not set(agents) <= VOTING_AGENTS:
+            raise ValueError("weights must be unique voting agents")
+        return self
+
+
+class PooledForecast(Contract):
+    """Committee pooling output for one entity, one pool per horizon."""
+
+    entity_token: EntityToken
+    pools: tuple[HorizonPool, ...] = Field(min_length=1)
+
+    def pool(self, horizon: Horizon) -> HorizonPool:
+        for p in self.pools:
+            if p.horizon == horizon:
+                return p
+        raise KeyError(horizon)
+
+    def weights(self, horizon: Horizon) -> dict[AgentName, float]:
+        return {w.agent: w.weight for w in self.pool(horizon).weights}
+
+    @property
+    def weights_d5(self) -> dict[AgentName, float]:
+        return self.weights(Horizon.D5)
+
+    @property
+    def weights_d21(self) -> dict[AgentName, float]:
+        return self.weights(Horizon.D21)
+
+    @property
+    def weights_d63(self) -> dict[AgentName, float]:
+        return self.weights(Horizon.D63)
+
+    @property
+    def logit_d5(self) -> float:
+        return self.pool(Horizon.D5).logit
+
+    @property
+    def logit_d21(self) -> float:
+        return self.pool(Horizon.D21).logit
+
+    @property
+    def logit_d63(self) -> float:
+        return self.pool(Horizon.D63).logit
+
+
+class CalibrationFit(Contract):
+    """Walk-forward stacker fit for one horizon (§7.2): ``p_cal = sigmoid(alpha + beta * L)``."""
+
+    horizon: Horizon
+    alpha: Finite
+    beta: Finite
+    active: bool  # False = pass-through (alpha 0, beta 1) before T_s independent periods
+    independent_periods: int = Field(ge=0)
+    observations: int = Field(ge=0)
+    base_rate: Probability | None  # trailing base rate anchoring alpha; None when not fitted
+
+
+class ErrorCorrelation(Contract):
+    """Agent error correlation and effective agent count for one horizon (§7.3)."""
+
+    horizon: Horizon
+    agents: int = Field(ge=2)
+    observations: int = Field(ge=2)
+    mean_correlation: Annotated[float, Field(ge=-1.0, le=1.0, allow_inf_nan=False)]
+    n_eff: Positive
+    monoculture_alert: bool  # n_eff < threshold
+
+
 class ProposedPosition(Contract):
     security_id: SecurityId
     entity_token: EntityToken
@@ -329,6 +414,63 @@ class FillReport(Contract):
     filled_at: AwareDatetime
 
 
+class BrokerOrder(Contract):
+    """The broker's authoritative view of one order (§9). Never synthesised locally."""
+
+    broker_order_id: Label
+    client_order_id: Label
+    symbol: Label
+    side: OrderSide
+    kind: OrderKind
+    qty: Positive
+    filled_qty: NonNegative
+    limit_price: Positive | None = None
+    filled_avg_price: Positive | None = None
+    status: BrokerOrderStatus
+    submitted_at: AwareDatetime
+    filled_at: AwareDatetime | None = None
+
+
+class MarketSession(Contract):
+    """One exchange trading session from the broker's official calendar (§9 scheduling)."""
+
+    session_date: date
+    opens_at: AwareDatetime
+    closes_at: AwareDatetime
+
+    @model_validator(mode="after")
+    def _ordered(self) -> Self:
+        if self.closes_at <= self.opens_at:
+            raise ValueError("a session closes after it opens")
+        return self
+
+
+class ExecutionRecord(Contract):
+    """Persisted execution evidence for one order (§4.3 orders, §9 logging).
+
+    ``fill_price`` and ``slippage_bps`` are the broker's fill against the recorded reference; they
+    are None until something fills. Paper slippage is not evidence of real costs (§9).
+    """
+
+    run_id: UUID
+    security_id: SecurityId
+    client_order_id: Label
+    broker_order_id: Label
+    kind: OrderKind
+    side: OrderSide
+    qty: Positive
+    filled_qty: NonNegative
+    limit_price: Positive | None = None
+    decision_price: Positive
+    reference_price: Positive
+    reference_source: ReferenceSource
+    fill_price: Positive | None = None
+    slippage_bps: Finite | None = None
+    status: BrokerOrderStatus
+    submitted_at: AwareDatetime
+    filled_at: AwareDatetime | None = None
+
+
 class RunRecord(Contract):
     run_id: UUID
     mode: RunMode
@@ -338,6 +480,7 @@ class RunRecord(Contract):
     started_at: AwareDatetime
     ended_at: AwareDatetime | None = None
     status_reason: str | None = Field(default=None, max_length=1000)
+    total_cost_usd: NonNegative = 0.0
 
     @model_validator(mode="after")
     def _times(self) -> Self:
@@ -391,4 +534,109 @@ class AgentScore(Contract):
     def _window(self) -> Self:
         if self.window_end < self.window_start:
             raise ValueError("window_end before window_start")
+        return self
+
+
+# --- Persistence records (written only by orchestration/sink.py) -------------------------------
+
+
+class VerdictRecord(Contract):
+    """One stored agent or red-team verdict plus its call accounting."""
+
+    security_id: SecurityId
+    verdict: AgentVerdict | RedTeamVerdict
+    tokens_in: int | None = Field(ge=0)  # None = not reported / no call was made, never zero
+    tokens_out: int | None = Field(ge=0)
+    cost_usd: NonNegative
+    latency_ms: int | None = Field(ge=0)
+
+
+class CommitteeDecisionRecord(Contract):
+    """A committee decision with the pooling detail and CIO outcome the table also keeps."""
+
+    decision: CommitteeDecision
+    pooled_logit: Finite | None = None
+    sizing_mode: SizingMode | None = None
+    cio_action: CioAction | None = None
+    rationale: str | None = Field(default=None, max_length=4000)
+
+
+class PortfolioSnapshot(Contract):
+    """The final book after the CIO. Cash is the residual (§8.1), stored, never chosen."""
+
+    run_id: UUID
+    as_of: AwareDatetime
+    book: ProposedBook
+    cash_weight: Probability
+    cio: CioDecision | None = None
+
+    @model_validator(mode="after")
+    def _consistent(self) -> Self:
+        if self.book.run_id != self.run_id or self.book.as_of != self.as_of:
+            raise ValueError("book does not belong to this snapshot")
+        if abs(self.cash_weight - self.book.cash_weight) > 1e-9:
+            raise ValueError("cash_weight is not the residual of the book")
+        return self
+
+
+class DlqRecord(Contract):
+    run_id: UUID
+    as_of: AwareDatetime
+    agent: Label
+    error_type: Label
+    payload: dict[str, str] = Field(default_factory=dict)
+
+
+class KillSwitchEvent(Contract):
+    run_id: UUID
+    triggered_at: AwareDatetime
+    trigger: KillTrigger
+    daily_loss: Finite | None = None  # fraction vs prior close equity
+    peak_drawdown: Finite | None = None  # logged alongside, not a trigger
+    cancelled_order_ids: tuple[Label, ...] = ()
+    flattened: bool = False
+
+    @model_validator(mode="after")
+    def _only_manual_flattens(self) -> Self:
+        if self.flattened and self.trigger is not KillTrigger.MANUAL:
+            raise ValueError("only a manual halt flattens positions (§9)")
+        return self
+
+
+class CommitmentAnchor(Contract):
+    model_config = ConfigDict(
+        extra="forbid", frozen=True, ser_json_bytes="base64", val_json_bytes="base64"
+    )
+
+    run_id: UUID
+    sha256: Sha256Hex
+    ots_proof: bytes | None = None
+    git_commit: Label | None = None
+    anchored_at: AwareDatetime
+    verified_at: AwareDatetime | None = None
+
+
+class StepArtifacts(Contract):
+    """Everything one ``as_of`` step produced; the sink writes it in a single transaction."""
+
+    run: RunRecord
+    verdicts: tuple[VerdictRecord, ...] = ()
+    decisions: tuple[CommitteeDecisionRecord, ...] = ()
+    portfolio: PortfolioSnapshot | None = None
+    commitment: DecisionCommitment | None = None
+    dlq: tuple[DlqRecord, ...] = ()
+    kill_switch: tuple[KillSwitchEvent, ...] = ()
+
+    @model_validator(mode="after")
+    def _one_run(self) -> Self:
+        rid = self.run.run_id
+        ids = [v.verdict.run_id for v in self.verdicts]
+        ids += [d.decision.run_id for d in self.decisions] + [d.run_id for d in self.dlq]
+        ids += [k.run_id for k in self.kill_switch]
+        if self.portfolio:
+            ids.append(self.portfolio.run_id)
+        if self.commitment:
+            ids.append(self.commitment.run_id)
+        if any(i != rid for i in ids):
+            raise ValueError("artifact belongs to a different run")
         return self

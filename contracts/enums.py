@@ -53,6 +53,7 @@ class RunStatus(StrEnum):
     GATED = "GATED"
     AGENTS_OK = "AGENTS_OK"
     COMMITTED = "COMMITTED"
+    ANCHORED = "ANCHORED"
     EXECUTED = "EXECUTED"
     SCORED = "SCORED"
     FAILED = "FAILED"
@@ -66,6 +67,7 @@ _RUN_PATH = (
     RunStatus.GATED,
     RunStatus.AGENTS_OK,
     RunStatus.COMMITTED,
+    RunStatus.ANCHORED,
     RunStatus.EXECUTED,
     RunStatus.SCORED,
 )
@@ -78,6 +80,10 @@ RUN_TRANSITIONS: Mapping[RunStatus, frozenset[RunStatus]] = {
         cur: frozenset({nxt, RunStatus.FAILED, RunStatus.PARTIAL})
         for cur, nxt in pairwise(_RUN_PATH)
     },
+    # Backtests are never executed: they stop at ANCHORED and may be scored from there (§11).
+    RunStatus.ANCHORED: frozenset(
+        {RunStatus.EXECUTED, RunStatus.SCORED, RunStatus.FAILED, RunStatus.PARTIAL}
+    ),
     **{s: frozenset() for s in TERMINAL_RUN_STATUSES},
 }
 
@@ -129,9 +135,33 @@ class CioAction(StrEnum):
     FLAG_FOR_REVIEW = "flag_for_review"
 
 
+class SizingMode(StrEnum):
+    """Which sizing branch produced a book (§8.1)."""
+
+    RANK = "rank"
+    CALIBRATED = "calibrated"
+
+
+class KillTrigger(StrEnum):
+    """What halted trading (§9). Only MANUAL flattens."""
+
+    DAILY_LOSS = "daily_loss"
+    STALE_FEED = "stale_feed"
+    MANUAL = "manual"
+
+
+# ``runs.status_reason`` of a run a kill-switch halt moved to PARTIAL (§9): terminal, never retried.
+HALT_REASON_PREFIX = "kill_switch:"
+
+
+def halt_reason(trigger: KillTrigger) -> str:
+    return f"{HALT_REASON_PREFIX}{trigger.value}"
+
+
 class Horizon(IntEnum):
     """Scoring horizon in trading days (§3.1, §18.3)."""
 
+    D5 = 5
     D21 = 21
     D63 = 63
 
@@ -150,6 +180,108 @@ class FeedName(StrEnum):
 class OrderSide(StrEnum):
     BUY = "buy"
     SELL = "sell"
+
+
+class OrderKind(StrEnum):
+    """Order type used by the §9 limit -> cancel -> market sequence."""
+
+    LIMIT = "limit"
+    MARKET = "market"
+
+
+class BrokerOrderStatus(StrEnum):
+    """Broker order state, collapsed to what execution decisions need (§9).
+
+    Anything not known to be final maps to OPEN or PENDING_CANCEL, so an unrecognised broker
+    status is never mistaken for a confirmed cancel.
+    """
+
+    OPEN = "open"
+    PARTIALLY_FILLED = "partially_filled"
+    PENDING_CANCEL = "pending_cancel"
+    FILLED = "filled"
+    CANCELED = "canceled"
+    EXPIRED = "expired"
+    DONE_FOR_DAY = "done_for_day"
+    REJECTED = "rejected"
+
+    @property
+    def terminal(self) -> bool:
+        return self in TERMINAL_ORDER_STATUSES
+
+
+class ReferenceSource(StrEnum):
+    """Where an execution reference price came from (§9)."""
+
+    IEX_MID = "iex_mid"
+    SIP_LAST = "sip_last"
+
+
+class SecurityKind(StrEnum):
+    """What a ``securities`` row is (§4.3). Only ``equity`` rows have a real CIK."""
+
+    EQUITY = "equity"
+    ETF = "etf"
+
+
+class Tape(StrEnum):
+    """Consolidated tape a trade printed on: A/B follow the CTS spec, C the UTP spec (§4.6)."""
+
+    A = "A"
+    B = "B"
+    C = "C"
+
+
+class RefStatus(StrEnum):
+    """Outcome of resolving a reference price (§4.6, §9). ``unresolved`` is durable evidence."""
+
+    RESOLVED = "resolved"
+    UNRESOLVED = "unresolved"
+
+
+class RefMode(StrEnum):
+    """How an execution reference was obtained: the live §9 rule or a historical SIP trade."""
+
+    LIVE = "live"
+    BACKTEST = "backtest"
+
+
+class RefReason(StrEnum):
+    """Why a reference is unresolved. There is deliberately no daily-price reason or source."""
+
+    NO_REFERENCE_PRICE = "no_reference_price"
+    NO_ELIGIBLE_TRADE = "no_eligible_trade"
+    UNKNOWN_CONDITION = "unknown_condition"
+    PROVIDER_MAPPING_UNVALIDATED = "provider_mapping_unvalidated"
+    SIP_ENTITLEMENT = "sip_entitlement"
+    INCOMPLETE_TRADES = "incomplete_trades"
+    CALENDAR_UNCOVERED = "calendar_uncovered"
+    AMBIGUOUS_ORDER = "ambiguous_order"  # same-instant trades that cannot be ordered or priced
+
+
+class ConditionEligibility(StrEnum):
+    """Whether one trade may set the consolidated last sale price (CTS/UTP, §4.6)."""
+
+    ELIGIBLE = "eligible"
+    INELIGIBLE = "ineligible"
+    CONDITIONAL = "conditional"  # only if it is the first/only qualifying last of the day
+    UNKNOWN = "unknown"
+
+
+class ReferenceJob(StrEnum):
+    """Market-data acquisition jobs (P6.3). They are not SLA feeds and cannot trigger a halt."""
+
+    CALENDAR = "calendar"
+    BENCHMARKS = "benchmarks"
+    DGS3MO = "dgs3mo"
+    REFERENCES = "references"  # polls for runs whose reference window is due
+    HALT_SWEEP = "halt_sweep"  # resolves pending halt-reference requests
+
+
+class HaltRequestStatus(StrEnum):
+    """A halt-reference request is only ever written pending; state is derived from later rows."""
+
+    SYMBOLS_PENDING = "symbols_pending"
 
 
 class ModelTier(StrEnum):
@@ -230,3 +362,14 @@ class AliasKind(StrEnum):
     CIK = "cik"
     BRAND = "brand"
     PERSON = "person"  # a named insider or executive (Form 4 filer)
+
+
+TERMINAL_ORDER_STATUSES = frozenset(
+    {
+        BrokerOrderStatus.FILLED,
+        BrokerOrderStatus.CANCELED,
+        BrokerOrderStatus.EXPIRED,
+        BrokerOrderStatus.DONE_FOR_DAY,
+        BrokerOrderStatus.REJECTED,
+    }
+)

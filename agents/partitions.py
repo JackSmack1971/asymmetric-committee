@@ -103,7 +103,7 @@ class EntityData:
     entity_token: str
     cik: int  # identity: hashed into insider pseudonyms, never rendered
     sector: str
-    mcap_tier: McapTier
+    mcap_tier: McapTier | None  # the renderer prints an unknown size explicitly
     features: FeatureRow
     facts: Sequence[FundamentalFact]
     insiders: Sequence[InsiderTxn]
