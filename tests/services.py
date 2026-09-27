@@ -52,7 +52,8 @@ def _local_postgres() -> Iterator[str]:
         raise AssertionError  # unreachable
     tmp = Path(tempfile.mkdtemp(prefix="pgtest-"))
     prefix: list[str] = []
-    if os.geteuid() == 0:
+    geteuid = getattr(os, "geteuid", None)  # absent on Windows
+    if geteuid is not None and geteuid() == 0:
         shutil.chown(tmp, "postgres")
         prefix = ["runuser", "-u", "postgres", "--"]
     port = _free_port()

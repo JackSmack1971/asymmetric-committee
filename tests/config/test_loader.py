@@ -5,12 +5,20 @@ from __future__ import annotations
 import shutil
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
 
-from config.loader import CONFIG_DIR, ConfigError, load_config
-from contracts.enums import BearSeverity, Horizon, ModelTier
+from config.loader import (
+    CONFIG_DIR,
+    ConfigError,
+    CostSource,
+    ServedModel,
+    UsageUnavailableError,
+    load_config,
+)
+from contracts.enums import BearSeverity, Horizon, ModelTier, ReasoningEffort
 from contracts.models import MAX_POSITION
 
 
@@ -89,6 +97,13 @@ def test_response_model_lookup_handles_primary_and_fallback_independently(cfg_di
                 "slug": "provider/served-fallback",
                 "stated_training_cutoff": "2024-06-30",
                 "supports_structured_outputs": True,
+                "rpm": 30,
+                "tpm": 100_000,
+                "input_price_usd_per_mtok": 0.5,
+                "output_price_usd_per_mtok": 1.5,
+                "family": "provider",
+                "measured_effective_cutoff": None,
+                "accepts_temperature": True,
             }
         ],
     )
@@ -106,6 +121,38 @@ def test_unknown_response_model_is_rejected() -> None:
 
     with pytest.raises(ValueError, match="unknown served model"):
         cfg.models.model_for_response("provider/unconfigured-model")
+
+
+@pytest.mark.parametrize(
+    "served", ["todo/strong-model", " TODO/strong-model", "TODO/strong-model:v2"]
+)
+def test_response_model_lookup_is_exact_match_only(served: str) -> None:
+    cfg = load_config(allow_placeholders=True, env={})
+
+    with pytest.raises(ValueError, match="unknown served model"):
+        cfg.models.model_for_response(served)
+
+
+def test_primary_and_fallback_lookup_return_own_metadata() -> None:
+    cfg = load_config(allow_placeholders=True, env={})
+    entry = cfg.models.tiers[ModelTier.FAST]
+
+    assert cfg.models.model_for_response(entry.primary.slug) == entry.primary
+    assert cfg.models.model_for_response(entry.fallbacks[0].slug) == entry.fallbacks[0]
+
+
+def test_shared_slug_across_tiers_with_identical_metadata_is_allowed(cfg_dir: Path) -> None:
+    # The probe tier reuses the fast primary (§10.1); lookup resolves to the same metadata.
+    cfg = load_config(cfg_dir, allow_placeholders=True, env={})
+    probe = cfg.models.tiers[ModelTier.PROBE].primary
+    assert cfg.models.model_for_response(probe.slug) == cfg.models.tiers[ModelTier.FAST].primary
+
+
+def test_shared_slug_across_tiers_with_conflicting_metadata_is_rejected(cfg_dir: Path) -> None:
+    edit(cfg_dir, "models", ["tiers", "probe", "primary", "stated_training_cutoff"], "2001-01-01")
+
+    with pytest.raises(ConfigError, match="conflicting metadata"):
+        load_config(cfg_dir, allow_placeholders=True, env={})
 
 
 def test_duplicate_slugs_within_tier_are_rejected(cfg_dir: Path) -> None:
@@ -184,6 +231,159 @@ def test_load_universe_file() -> None:
     assert load_universe(CONFIG_DIR / "universe.yaml").top_n == 40
 
 
+# --- per-slug limits, pricing and cost policy (§10.2) ------------------------------------------
+
+
+def edit_shared_primary(cfg_dir: Path, field: str, value: object) -> None:
+    """The probe primary reuses the fast primary slug, so both must change together."""
+    for tier in ("fast", "probe"):
+        edit(cfg_dir, "models", ["tiers", tier, "primary", field], value)
+
+
+LIMIT_FIELDS = ["rpm", "tpm"]
+PRICE_FIELDS = ["input_price_usd_per_mtok", "output_price_usd_per_mtok"]
+ALL_META_FIELDS = LIMIT_FIELDS + PRICE_FIELDS
+
+
+@pytest.mark.parametrize("field", LIMIT_FIELDS)
+@pytest.mark.parametrize("bad", [0, -1, 1.5, "fast"])
+def test_limits_must_be_positive_ints(cfg_dir: Path, field: str, bad: object) -> None:
+    edit(cfg_dir, "models", ["tiers", "fast", "primary", field], bad)
+
+    with pytest.raises(ConfigError, match=field):
+        load_config(cfg_dir, allow_placeholders=True, env={})
+
+
+@pytest.mark.parametrize("field", PRICE_FIELDS)
+@pytest.mark.parametrize("bad", [-0.01, float("nan"), float("inf"), "free"])
+def test_prices_must_be_finite_and_non_negative(cfg_dir: Path, field: str, bad: object) -> None:
+    edit(cfg_dir, "models", ["tiers", "fast", "primary", field], bad)
+
+    with pytest.raises(ConfigError, match=field):
+        load_config(cfg_dir, allow_placeholders=True, env={})
+
+
+@pytest.mark.parametrize("field", PRICE_FIELDS)
+def test_zero_price_is_allowed(cfg_dir: Path, field: str) -> None:
+    edit_shared_primary(cfg_dir, field, 0)
+
+    cfg = load_config(cfg_dir, allow_placeholders=True, env={})
+    assert getattr(cfg.models.tiers[ModelTier.FAST].primary, field) == 0
+
+
+@pytest.mark.parametrize("field", ALL_META_FIELDS)
+@pytest.mark.parametrize("where", ["primary", "fallback"])
+def test_every_primary_and_fallback_needs_complete_metadata(
+    cfg_dir: Path, field: str, where: str
+) -> None:
+    file = cfg_dir / "models.yaml"
+    data = yaml.safe_load(file.read_text())
+    entry = data["tiers"]["fast"]
+    del (entry["primary"] if where == "primary" else entry["fallbacks"][0])[field]
+    file.write_text(yaml.safe_dump(data))
+
+    with pytest.raises(ConfigError, match=field):
+        load_config(cfg_dir, allow_placeholders=True, env={})
+
+
+def test_shared_slug_with_conflicting_pricing_is_rejected(cfg_dir: Path) -> None:
+    edit(cfg_dir, "models", ["tiers", "probe", "primary", "rpm"], 5)
+
+    with pytest.raises(ConfigError, match="conflicting metadata"):
+        load_config(cfg_dir, allow_placeholders=True, env={})
+
+
+def test_repo_models_carry_limits_and_prices() -> None:
+    cfg = load_config(allow_placeholders=True, env={})
+    for entry in cfg.models.tiers.values():
+        for model in entry.models:
+            assert model.rpm > 0 and model.tpm > 0
+            assert model.input_price_usd_per_mtok >= 0 and model.output_price_usd_per_mtok >= 0
+
+
+def _fast_primary(cfg_dir: Path) -> ServedModel:
+    edit_shared_primary(cfg_dir, "input_price_usd_per_mtok", 2.0)
+    edit_shared_primary(cfg_dir, "output_price_usd_per_mtok", 10.0)
+    return (
+        load_config(cfg_dir, allow_placeholders=True, env={}).models.tiers[ModelTier.FAST].primary
+    )
+
+
+def test_local_cost_is_tokens_times_configured_prices(cfg_dir: Path) -> None:
+    model = _fast_primary(cfg_dir)
+
+    cost = model.call_cost({"prompt_tokens": 1_000, "completion_tokens": 200})
+
+    assert cost.source is CostSource.LOCAL
+    assert cost.usd == pytest.approx(0.002 + 0.002)
+
+
+def test_local_cost_is_authoritative_over_provider_cost(cfg_dir: Path) -> None:
+    model = _fast_primary(cfg_dir)
+
+    cost = model.call_cost({"prompt_tokens": 1_000_000, "completion_tokens": 0, "cost": 99.0})
+
+    assert cost.source is CostSource.LOCAL
+    assert cost.usd == pytest.approx(2.0)
+
+
+def test_zero_tokens_cost_zero_locally(cfg_dir: Path) -> None:
+    model = _fast_primary(cfg_dir)
+
+    assert model.call_cost({"prompt_tokens": 0, "completion_tokens": 0}).usd == 0.0
+
+
+@pytest.mark.parametrize(
+    "usage", [{"completion_tokens": 10, "cost": 0.25}, {"prompt_tokens": None, "cost": 0.25}]
+)
+def test_missing_token_counts_fall_back_to_provider_cost(
+    cfg_dir: Path, usage: dict[str, Any]
+) -> None:
+    model = _fast_primary(cfg_dir)
+
+    cost = model.call_cost(usage)
+
+    assert cost.source is CostSource.PROVIDER_FALLBACK
+    assert cost.usd == 0.25
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        None,
+        {},
+        {"prompt_tokens": 5},
+        {"prompt_tokens": -1, "completion_tokens": 1},
+        {"prompt_tokens": True, "completion_tokens": 1},
+        {"completion_tokens": 10, "cost": -1},
+        {"completion_tokens": 10, "cost": float("nan")},
+        {"completion_tokens": 10, "cost": "0.25"},
+    ],
+)
+def test_unusable_usage_fails_closed(cfg_dir: Path, usage: dict[str, Any] | None) -> None:
+    model = _fast_primary(cfg_dir)
+
+    with pytest.raises(UsageUnavailableError):
+        model.call_cost(usage)
+
+
+def test_run_budget_is_checked_against_summed_local_costs(cfg_dir: Path) -> None:
+    edit(cfg_dir, "pipeline", ["budgets", "run_budget_usd"], 0.01)
+    model = _fast_primary(cfg_dir)
+    budget = load_config(cfg_dir, allow_placeholders=True, env={}).pipeline.budgets.run_budget_usd
+    mocked_usage = [{"prompt_tokens": 2_000, "completion_tokens": 100}] * 3  # 0.005 each
+
+    spent = 0.0
+    exceeded_after = None
+    for i, usage in enumerate(mocked_usage, start=1):
+        spent += model.call_cost(usage).usd
+        if spent > budget and exceeded_after is None:
+            exceeded_after = i
+
+    assert spent == pytest.approx(0.015)
+    assert exceeded_after == 3
+
+
 def test_sectors_crosswalk_lookup() -> None:
     sectors = load_config(allow_placeholders=True, env={}).sectors
     assert {e.etf for e in sectors.sectors} >= {"XLK", "XLE", "XLF"}
@@ -204,3 +404,82 @@ def test_overlapping_sic_ranges_rejected(cfg_dir: Path) -> None:
     path.write_text(yaml.safe_dump(data))
     with pytest.raises(ConfigError, match="overlapping"):
         load_config(cfg_dir, allow_placeholders=True, env={})
+
+
+NEW_MODEL_FIELDS = ["family", "measured_effective_cutoff", "accepts_temperature"]
+
+
+@pytest.mark.parametrize("field", NEW_MODEL_FIELDS)
+@pytest.mark.parametrize("where", [["primary"], ["fallbacks", 0]])
+def test_model_missing_required_field_rejected(
+    cfg_dir: Path, field: str, where: list[str | int]
+) -> None:
+    file = cfg_dir / "models.yaml"
+    data = yaml.safe_load(file.read_text())
+    node = data["tiers"]["strong"]
+    for key in where:
+        node = node[key]
+    del node[field]
+    file.write_text(yaml.safe_dump(data))
+    with pytest.raises(ConfigError, match=field):
+        load_config(cfg_dir, allow_placeholders=True, env={})
+
+
+@pytest.mark.parametrize(
+    ("path", "value", "match"),
+    [
+        (["tiers", "fast", "primary", "family"], "", "family"),
+        (["tiers", "fast", "primary", "reasoning_effort"], "extreme", "reasoning_effort"),
+        (["tiers", "fast", "primary", "accepts_temperature"], "maybe", "accepts_temperature"),
+        (["tiers", "fast", "primary", "measured_effective_cutoff"], "soon", "measured"),
+    ],
+)
+def test_invalid_model_metadata_rejected(
+    cfg_dir: Path, path: list[str], value: object, match: str
+) -> None:
+    edit(cfg_dir, "models", path, value)
+    with pytest.raises(ConfigError, match=match):
+        load_config(cfg_dir, allow_placeholders=True, env={})
+
+
+def test_reasoning_effort_is_optional_and_typed(cfg_dir: Path) -> None:
+    assert (
+        load_config(cfg_dir, allow_placeholders=True, env={})
+        .models.tiers[ModelTier.FAST]
+        .primary.reasoning_effort
+        is None
+    )
+    for tier in ("fast", "probe"):  # probe reuses the fast primary; metadata must match
+        edit(cfg_dir, "models", ["tiers", tier, "primary", "reasoning_effort"], "high")
+    fast = load_config(cfg_dir, allow_placeholders=True, env={}).models.tiers[ModelTier.FAST]
+    assert fast.primary.reasoning_effort is ReasoningEffort.HIGH
+
+
+def test_effective_cutoff_is_later_of_stated_and_measured(cfg_dir: Path) -> None:
+    def edit_fast(field: str, value: object) -> None:
+        for tier in ("fast", "probe"):  # probe reuses the fast primary; metadata must match
+            edit(cfg_dir, "models", ["tiers", tier, "primary", field], value)
+
+    edit_fast("stated_training_cutoff", "2024-01-01")
+
+    def primary() -> ServedModel:
+        return (
+            load_config(cfg_dir, allow_placeholders=True, env={})
+            .models.tiers[ModelTier.FAST]
+            .primary
+        )
+
+    assert primary().effective_cutoff == date(2024, 1, 1)  # measured null -> stated
+    edit_fast("measured_effective_cutoff", "2024-09-30")
+    assert primary().effective_cutoff == date(2024, 9, 30)  # measured later wins
+    edit_fast("measured_effective_cutoff", "2023-06-01")
+    assert primary().effective_cutoff == date(2024, 1, 1)  # measured earlier -> stated
+
+
+def test_latest_effective_cutoff_spans_all_primaries_and_fallbacks(cfg_dir: Path) -> None:
+    edit(
+        cfg_dir, "models", ["tiers", "strong", "primary", "measured_effective_cutoff"], "2027-02-01"
+    )
+    cfg = load_config(cfg_dir, allow_placeholders=True, env={})
+    assert cfg.models.latest_effective_cutoff() == date(2027, 2, 1)
+    assert cfg.models.latest_effective_cutoff() >= cfg.models.latest_stated_cutoff()

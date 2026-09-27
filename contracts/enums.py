@@ -160,6 +160,14 @@ class ModelTier(StrEnum):
     PROBE = "probe"
 
 
+class ReasoningEffort(StrEnum):
+    """OpenRouter ``reasoning.effort`` levels a model entry may set (§10.1)."""
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
 class PriceFeed(StrEnum):
     """Alpaca bar feed (§4.1). IEX is the free live feed; SIP is used for history > 15 min old."""
 
@@ -212,3 +220,13 @@ class McapTier(StrEnum):
     SMALL = "small"  # < $2B
     MID = "mid"  # $2B to $10B
     LARGE = "large"  # >= $10B
+
+
+class AliasKind(StrEnum):
+    """Where an anonymizer alias came from (invariant 4)."""
+
+    NAME = "name"
+    TICKER = "ticker"
+    CIK = "cik"
+    BRAND = "brand"
+    PERSON = "person"  # a named insider or executive (Form 4 filer)

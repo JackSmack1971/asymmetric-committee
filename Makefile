@@ -45,8 +45,12 @@ gate-P2: lint
 	uv run pytest tests/contracts tests/config tests/features tests/gate tests/risk tests/evaluation
 	uv run python -m contracts.schema_export --check
 
-gate-P3:
-	@echo "gate-P3: not implemented"; exit 1
+# P3: lint (incl. import-linter) + contracts/config/features/universe + agents (partitions, leak
+# tests, prompts, client, Redis bucket/cache/DLQ, runner) + exported LLM schemas are current.
+# Needs Redis (TEST_REDIS_URL or a local binary); REQUIRE_SERVICES=1 turns a skip into a failure.
+gate-P3: lint
+	REQUIRE_SERVICES=1 uv run pytest tests/contracts tests/config tests/features tests/universe tests/agents
+	uv run python -m contracts.schema_export --check
 
 gate-P4:
 	@echo "gate-P4: not implemented"; exit 1

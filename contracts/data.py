@@ -7,12 +7,14 @@ knowable) and ``source_version`` (filing accession, article revision, bar feed).
 
 from __future__ import annotations
 
+import re
 from datetime import date
 from typing import Annotated, Any, Self
 
 from pydantic import AwareDatetime, Field, model_validator
 
 from contracts.enums import (
+    AliasKind,
     FeedName,
     InsiderRole,
     InsiderTxnCode,
@@ -24,7 +26,8 @@ from contracts.models import Contract, Finite, NonNegative, Positive, SecurityId
 
 Accession = Annotated[str, Field(pattern=r"^\d{10}-\d{2}-\d{6}$")]
 Version = Annotated[str, Field(min_length=1, max_length=128)]
-Ticker = Annotated[str, Field(pattern=r"^[A-Z][A-Z0-9.\-]{0,9}$")]
+_TICKER_RE = r"[A-Z][A-Z0-9.\-]{0,9}"
+Ticker = Annotated[str, Field(pattern=rf"^{_TICKER_RE}$")]
 
 
 class Fact(Contract):
@@ -128,6 +131,66 @@ class Security(Contract):
     industry: Annotated[str, Field(max_length=256)] | None
     listed_from: date | None
     listed_to: date | None
+
+
+AliasText = Annotated[str, Field(min_length=1, max_length=256, pattern=r"^\S(?:.*\S)?$")]
+
+
+class Alias(Contract):
+    """One string the anonymizer must remove from LLM-bound text."""
+
+    text: AliasText
+    kind: AliasKind
+    canonical: AliasText | None = None  # PERSON only: the filed name every variant hashes from
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        if (self.kind is AliasKind.PERSON) != (self.canonical is not None):
+            raise ValueError("canonical is required for, and only for, person aliases")
+        if self.kind is AliasKind.CIK and not (self.text.isascii() and self.text.isdecimal()):
+            raise ValueError("cik alias must be decimal digits")
+        if self.kind is AliasKind.CIK and int(self.text) < 1:
+            raise ValueError("cik alias must be positive")
+        if self.kind is AliasKind.TICKER and not re.fullmatch(_TICKER_RE, self.text):
+            raise ValueError("ticker alias must be a valid ticker")
+        return self
+
+
+class SecurityAliases(Contract):
+    """Every alias of one security. Name, ticker and CIK are mandatory; brands are optional."""
+
+    security_id: SecurityId
+    aliases: tuple[Alias, ...] = Field(min_length=3)
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        kinds = {a.kind for a in self.aliases}
+        missing = {AliasKind.NAME, AliasKind.TICKER, AliasKind.CIK} - kinds
+        if missing:
+            raise ValueError(f"missing alias kinds: {sorted(k.value for k in missing)}")
+        seen = [(a.kind, a.text.casefold()) for a in self.aliases]
+        if len(set(seen)) != len(seen):
+            raise ValueError("duplicate alias within one security")
+        return self
+
+
+class AliasList(Contract):
+    """Aliases of every security listed at ``as_of`` (built by ``store.as_of.alias_list``).
+
+    Point-in-time: only securities listed at ``as_of`` appear, so a ticker reused after a delisting
+    never maps to the wrong company. An alias shared by several securities is legal; the
+    anonymizer masks it with a neutral token.
+    """
+
+    as_of: AwareDatetime
+    securities: tuple[SecurityAliases, ...]
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        ids = [s.security_id for s in self.securities]
+        if len(set(ids)) != len(ids):
+            raise ValueError("duplicate security_id in alias list")
+        return self
 
 
 class UniverseMember(Fact):

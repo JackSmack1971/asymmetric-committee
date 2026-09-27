@@ -37,7 +37,6 @@ def enum_types(model: type[BaseModel], field: str) -> set[type[Enum]]:
 PAIRS = [
     # agents -> committee
     ((m.AgentVerdict, "agent"), (m.AgentWeight, "agent")),
-    ((m.AgentVerdict, "horizon_days"), (m.CommitteeDecision, "horizon_days")),
     ((m.RedTeamVerdict, "bear_severity"), (m.CommitteeDecision, "bear_severity")),
     ((m.RedTeamVerdict, "horizon_days"), (m.CommitteeDecision, "horizon_days")),
     # partitioner -> agents (evidence partitions)
@@ -47,7 +46,6 @@ PAIRS = [
     # execution: intent -> fill
     ((m.OrderIntent, "side"), (m.FillReport, "side")),
     # evaluator: verdict/outcome/score share horizon and agent
-    ((m.AgentVerdict, "horizon_days"), (m.OutcomeRecord, "horizon")),
     ((m.OutcomeRecord, "horizon"), (m.AgentScore, "horizon")),
     ((m.AgentVerdict, "agent"), (m.AgentScore, "agent")),
     ((m.RedTeamVerdict, "agent"), (m.AgentScore, "agent")),
@@ -94,8 +92,9 @@ def test_pipeline_chain_validates() -> None:
     llm_out = m.AgentVerdictLLM.model_validate_json(
         m.AgentVerdictLLM(
             stance=enums.Stance.BUY,
-            p_outperform=0.62,
-            horizon_days=enums.Horizon.D21,
+            p_outperform_5=0.55,
+            p_outperform_21=0.62,
+            p_outperform_63=0.66,
             key_evidence=(ev,),
             risks=(),
             data_sufficiency=enums.DataSufficiency.FULL,
@@ -119,7 +118,7 @@ def test_pipeline_chain_validates() -> None:
     red_out = m.RedTeamVerdictLLM(
         bear_severity=enums.BearSeverity.HIGH,
         falsifiable_risk="Gross margin falls below 40% next quarter",
-        horizon_days=verdicts[0].horizon_days,
+        horizon_days=enums.Horizon.D21,
         key_evidence=(ev,),
     )
     red = m.RedTeamVerdict.from_llm(
@@ -137,7 +136,7 @@ def test_pipeline_chain_validates() -> None:
         security_id=1,
         entity_token=verdicts[0].entity_token,
         as_of=NOW,
-        horizon_days=verdicts[0].horizon_days,
+        horizon_days=enums.Horizon.D21,
         pooled_p=0.62,
         dispersion=0.1,
         agent_weights=tuple(m.AgentWeight(agent=v.agent, weight=1.0) for v in verdicts),

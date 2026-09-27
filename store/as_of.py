@@ -11,13 +11,14 @@ forbids it outside ``store/`` and ``ingest/``).
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import Column, ColumnElement, Connection, Table, and_, func, select
 from sqlalchemy.dialects.postgresql import distinct_on
 
 from contracts.data import (
+    AliasList,
     FeatureRow,
     FeedHealth,
     FeedStaleness,
@@ -30,11 +31,13 @@ from contracts.data import (
 )
 from contracts.enums import FeedName
 from store import _tables as t
+from store.aliases import build_alias_list
 
 Conn = Connection
 
 __all__ = [
     "Conn",
+    "alias_list",
     "feature_rows",
     "feed_health",
     "feed_staleness",
@@ -197,6 +200,23 @@ def securities(
             )
         )
     return [Security.model_validate(dict(r._mapping)) for r in conn.execute(stmt)]
+
+
+def alias_list(
+    conn: Conn,
+    as_of: datetime,
+    brands: Mapping[int, Sequence[str]] | None = None,
+    security_ids: Iterable[int] | None = None,
+) -> AliasList:
+    """Anonymizer aliases (name, ticker, CIK, brands) of securities listed at ``as_of`` (UTC date).
+
+    Identity comes from ``securities`` (stored reference data); ``brands`` maps CIK -> brand
+    aliases from ``config.aliases``. Pass ``security_ids`` to bound the list (the masker's cost
+    grows with its size).
+    """
+    _check_ts(as_of)
+    listed = securities(conn, security_ids, listed_on=as_of.astimezone(UTC).date())
+    return build_alias_list(listed, as_of, brands)
 
 
 def feed_health(conn: Conn) -> list[FeedHealth]:

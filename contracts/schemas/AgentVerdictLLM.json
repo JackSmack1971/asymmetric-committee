@@ -9,14 +9,6 @@
       ],
       "type": "string"
     },
-    "horizon_days": {
-      "description": "Scoring horizon in trading days.",
-      "enum": [
-        21,
-        63
-      ],
-      "type": "integer"
-    },
     "key_evidence": {
       "description": "1 to 5 citations of input rows.",
       "items": {
@@ -53,8 +45,16 @@
       },
       "type": "array"
     },
-    "p_outperform": {
-      "description": "Probability (0 to 1) the entity beats its sector ETF over the horizon.",
+    "p_outperform_21": {
+      "description": "Probability (0 to 1) the entity beats its sector ETF over 21 trading days.",
+      "type": "number"
+    },
+    "p_outperform_5": {
+      "description": "Probability (0 to 1) the entity beats its sector ETF over 5 trading days.",
+      "type": "number"
+    },
+    "p_outperform_63": {
+      "description": "Probability (0 to 1) the entity beats its sector ETF over 63 trading days.",
       "type": "number"
     },
     "risks": {
@@ -77,8 +77,9 @@
   },
   "required": [
     "stance",
-    "p_outperform",
-    "horizon_days",
+    "p_outperform_5",
+    "p_outperform_21",
+    "p_outperform_63",
     "key_evidence",
     "risks",
     "data_sufficiency"

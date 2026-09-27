@@ -61,10 +61,15 @@ class EvidenceRef(Contract):
 
 class AgentVerdictLLM(Contract):
     stance: Stance
-    p_outperform: Probability = Field(
-        description="Probability (0 to 1) the entity beats its sector ETF over the horizon."
+    p_outperform_5: Probability = Field(
+        description="Probability (0 to 1) the entity beats its sector ETF over 5 trading days."
     )
-    horizon_days: Horizon = Field(description="Scoring horizon in trading days.")
+    p_outperform_21: Probability = Field(
+        description="Probability (0 to 1) the entity beats its sector ETF over 21 trading days."
+    )
+    p_outperform_63: Probability = Field(
+        description="Probability (0 to 1) the entity beats its sector ETF over 63 trading days."
+    )
     key_evidence: tuple[EvidenceRef, ...] = Field(
         min_length=1, max_length=5, description="1 to 5 citations of input rows."
     )
