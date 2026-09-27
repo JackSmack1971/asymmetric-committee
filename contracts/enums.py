@@ -276,6 +276,9 @@ class ReferenceJob(StrEnum):
     DGS3MO = "dgs3mo"
     REFERENCES = "references"  # polls for runs whose reference window is due
     HALT_SWEEP = "halt_sweep"  # resolves pending halt-reference requests
+    CORPORATE_ACTIONS = "corporate_actions"  # P6.4: actions + per-security coverage
+    LISTING_STATUS = "listing_status"  # P6.4: Alpaca asset-status polls + EDGAR Form 25
+    DELISTINGS = "delistings"  # P6.4: evidence-hierarchy derivation (§4.6)
 
 
 class HaltRequestStatus(StrEnum):
@@ -373,3 +376,125 @@ TERMINAL_ORDER_STATUSES = frozenset(
         BrokerOrderStatus.REJECTED,
     }
 )
+
+
+# --- P6.4 corporate actions + delistings (§4.6) -------------------------------------------------
+
+
+class CorporateActionType(StrEnum):
+    """Every type Alpaca ``GET /v1/corporate-actions`` supports (``types`` parameter, 2026-09).
+
+    The value is the singular ``types`` token; `response_key` is the plural response group.
+    """
+
+    REVERSE_SPLIT = "reverse_split"
+    FORWARD_SPLIT = "forward_split"
+    UNIT_SPLIT = "unit_split"
+    CASH_DIVIDEND = "cash_dividend"
+    STOCK_DIVIDEND = "stock_dividend"
+    SPIN_OFF = "spin_off"
+    CASH_MERGER = "cash_merger"
+    STOCK_MERGER = "stock_merger"
+    STOCK_AND_CASH_MERGER = "stock_and_cash_merger"
+    REDEMPTION = "redemption"
+    NAME_CHANGE = "name_change"
+    WORTHLESS_REMOVAL = "worthless_removal"
+    RIGHTS_DISTRIBUTION = "rights_distribution"
+    PARTIAL_CALL = "partial_call"
+    REORGANIZATION = "reorganization"
+
+    @property
+    def response_key(self) -> str:
+        return f"{self.value}s"
+
+
+class ActionInterpretation(StrEnum):
+    """What later return construction may do with an action. ``uninterpreted`` blocks a window."""
+
+    SPLIT_FACTOR = "split_factor"
+    CASH_DIVIDEND = "cash_dividend"
+    STOCK_DISTRIBUTION = "stock_distribution"
+    TERMINAL = "terminal"
+    IDENTITY = "identity"
+    UNINTERPRETED = "uninterpreted"
+
+
+ACTION_INTERPRETATION: Mapping[CorporateActionType, ActionInterpretation] = {
+    CorporateActionType.FORWARD_SPLIT: ActionInterpretation.SPLIT_FACTOR,
+    CorporateActionType.REVERSE_SPLIT: ActionInterpretation.SPLIT_FACTOR,
+    CorporateActionType.CASH_DIVIDEND: ActionInterpretation.CASH_DIVIDEND,
+    CorporateActionType.STOCK_DIVIDEND: ActionInterpretation.STOCK_DISTRIBUTION,
+    CorporateActionType.CASH_MERGER: ActionInterpretation.TERMINAL,
+    CorporateActionType.STOCK_MERGER: ActionInterpretation.TERMINAL,
+    CorporateActionType.STOCK_AND_CASH_MERGER: ActionInterpretation.TERMINAL,
+    CorporateActionType.REDEMPTION: ActionInterpretation.TERMINAL,
+    CorporateActionType.WORTHLESS_REMOVAL: ActionInterpretation.TERMINAL,
+    CorporateActionType.NAME_CHANGE: ActionInterpretation.IDENTITY,
+    # Stored faithfully; a return window containing one is UNRESOLVED until interpreted.
+    CorporateActionType.UNIT_SPLIT: ActionInterpretation.UNINTERPRETED,
+    CorporateActionType.SPIN_OFF: ActionInterpretation.UNINTERPRETED,
+    CorporateActionType.RIGHTS_DISTRIBUTION: ActionInterpretation.UNINTERPRETED,
+    CorporateActionType.PARTIAL_CALL: ActionInterpretation.UNINTERPRETED,
+    CorporateActionType.REORGANIZATION: ActionInterpretation.UNINTERPRETED,
+}
+
+
+class KnowledgeBasis(StrEnum):
+    """How a row was acquired. ``backfill`` rows are sensitivity/debug evidence only: they never
+    feed headline metrics, sequential decisions or forward-test evidence (readers exclude them
+    unless asked)."""
+
+    PROSPECTIVE = "prospective"
+    BACKFILL = "backfill"
+
+
+class ActionCoverageFilter(StrEnum):
+    """The provider's date filter a coverage range describes. Alpaca ``start``/``end`` are
+    inclusive bounds on ``process_date`` (API reference, re-checked 2026-09-27)."""
+
+    PROCESS_DATE = "process_date"
+
+
+class AssetStatus(StrEnum):
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+    NOT_FOUND = "not_found"  # the broker answered 404 for the symbol (durable evidence, not error)
+
+
+class SymbolSource(StrEnum):
+    SEED = "seed"  # the ticker a security was created with
+    NAME_CHANGE = "name_change"  # an Alpaca name_change action (continuity evidence)
+
+
+class DelistingStatus(StrEnum):
+    DELISTED = "delisted"
+    IDENTITY_CHANGED = "identity_changed"
+    SUSPECTED_GAP = "suspected_gap"
+
+
+class DelistingReason(StrEnum):
+    CASH_MERGER = "cash_merger"
+    STOCK_MERGER = "stock_merger"
+    STOCK_AND_CASH_MERGER = "stock_and_cash_merger"
+    REDEMPTION = "redemption"
+    WORTHLESS_REMOVAL = "worthless_removal"
+    NAME_CHANGE = "name_change"
+    LISTING_TERMINATED = "listing_terminated"  # inactive polls + Form 25, no terminal action
+    MARKET_DATA_ABSENCE = "market_data_absence"  # >= N confirmed sessions without a bar
+
+
+class TerminalReturnSource(StrEnum):
+    CONSIDERATION = "consideration"  # inputs stored; the value is computed at scoring (P6.5)
+    WORTHLESS = "worthless"  # -100%
+    DEFAULT = "default"  # conservative -30% (Shumway 1997), flagged for sensitivity reporting
+
+
+class Form25Provision(StrEnum):
+    """The 17 CFR 240.12d2-2 paragraph a Form 25 relies on (its checkbox)."""
+
+    A1 = "a1"  # exchange: entire class called for redemption/maturity/retirement
+    A2 = "a2"  # exchange: entire class redeemed or paid
+    A3 = "a3"  # exchange: substitution (successor may delay effectiveness, (d)(8))
+    A4 = "a4"  # exchange: all rights extinguished
+    B = "b"  # exchange: delisting under its own rules
+    C = "c"  # issuer: voluntary withdrawal
