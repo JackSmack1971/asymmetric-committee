@@ -11,7 +11,7 @@ Read at the start of every session; update at the end. Spec: `docs/asymmetric-co
 | P3 Agents | Implemented; PR #11 open | Gate recipe commands passed manually: lint, 515 tests (zero skips), schema freshness. `make` unavailable, so the target itself was not invoked. | `phase/P3` | Review pending. Open items: owner-supplied model slugs/prices and alias coverage; insider signal remains 0 until deeper Form 4 history is loaded. Plan: `docs/plans/P3.md`. |
 | P4 Committee + risk + CIO | Implemented; owner defaults ratified; locally verified | Manual gate recipe 567 passed, 0 skipped | `phase/P4` | `make` unavailable. Plan: `docs/plans/P4.md`. Publish after P3 integration, then rerun on PR head. |
 | P5 Orchestration + execution | Implemented and locally committed; awaiting P4 sequence | Manual gate recipe: 1086 passed, 0 skipped with TimescaleDB + Redis | `phase/P5` | `make` unavailable. Plan: `docs/plans/P5.md`. Owner-supplied production configuration still blocks a real start by design. Publish after P4 integration, rerun on PR head. |
-| P6 Evaluation | In progress: P6.0 ratified, P6.1–P6.3 implemented and locally committed | `make gate-P6` (stub) | `phase/P6` | Plan: `docs/plans/P6.md`. PR waits for P5 sequence and completion of the simulation rerun. |
+| P6 Evaluation | In progress: P6.0 ratified; P6.1–P6.3 merged to `main` (PR #12, `98cd047`); P6.4 implemented + closure fixes (P6.4a, P6.4b) locally, uncommitted | `make gate-P6` (stub) | `phase/P6` (local, fast-forwarded to `main`) | Plans: `docs/plans/P6.md`, `docs/plans/P6.3.md`, `docs/plans/P6.4.md`. Next slice P6.5 outcomes (not started). |
 | P7 Dashboard | Not started | `make gate-P7` (stub) | `phase/P7` | |
 | P8 Forward test | Not started | `make gate-P8` (stub) | `phase/P8` | |
 
@@ -63,7 +63,7 @@ Read at the start of every session; update at the end. Spec: `docs/asymmetric-co
 - Form 4: only the non-derivative table is ingested; 4/A amendments are separate rows (not merged with the original).
 - Early-close sessions are treated as 16:00 ET closes (only delays availability); exchange holidays are not modelled for month-end dates.
 - P2 covariance is diagonal; correlated sector portfolios can realize volatility above the modelled 12% target. Adopt a point-in-time covariance estimator before treating the target as a forecast.
-- P1 stores raw bars but no point-in-time corporate-action feed. `fs_v1` therefore cannot distinguish splits from returns; add such a feed before using split-affected windows in production evaluation.
+- P1 stores raw bars. P6.4 adds a point-in-time corporate-action feed (`corporate_actions` + per-security coverage), but `fs_v1` does not consume it yet, so features still cannot distinguish splits from returns.
 
 ## Open questions (seeded from §18)
 
@@ -222,3 +222,11 @@ Read at the start of every session; update at the end. Spec: `docs/asymmetric-co
 - CTS v2.11b / UTP v4.1 last-sale tables are implemented; the Alpaca provider mapping ships entirely `validated: false`, so live/backtest SIP resolution is operationally blocked until the owner reviews `ingest.condition_probe` output.
 - Fresh verification on this branch (Timescale pg16 + Redis 7): full `pytest tests` passes (1400 passed, 21 deselected, zero skipped); Ruff, format, mypy (211 files), lint-imports (5 kept), and schema check pass. P6.1 simulation tests are deselected from the full suite; a separate rerun was interrupted and has no completed result. Migration up/down/up and the P6.1 simulation results above are prior recorded evidence, not rerun in this pass. `make gate-P6` remains a stub and is not passing.
 - Commit history is split into P6 planning/semantics, P6.1 sequential validity, P6.2 scorability, and P6.3 market-data foundations. No P6 commits have been pushed.
+
+## P6.4 (2026-09-27)
+
+- Owner decisions: never backdate (`available_at` = first observation); `backfill` rows sensitivity/debug only; `security_symbols` preserves `security_id` across name changes, never merges on CIK alone; delisting hierarchy per blueprint §4.6 (Form 25 + two inactive polls for the status-derived default, Form 15 not required, 10 missing sessions → `suspected_gap` only); uninterpreted actions make a window UNRESOLVED.
+- Alpaca `/v1/corporate-actions` `start`/`end` filter `process_date` (API reference re-checked 2026-09-27); coverage records process-date ranges clamped to the day before the fetch. Mapping ex-date windows to process-date coverage is a P6.5 decision.
+- `ensure_security` now resolves identity via current ticker, then recorded former symbols; `alias_list` masks former tickers too (invariant 4).
+- P6.4a closure fixes (D1 dated attribution, D2 non-destructive rename conflicts, D3 unresolved acquirer stays consideration, D4 Form 25 floor/stated date, H1 withdrawal scope, H2 sensitivity-only backfill readers): see `docs/plans/P6.4.md`.
+- Open: fixtures are synthetic (record real responses); whether `symbols=` matches `old_symbol`/`acquiree_symbol`/`source_symbol` is unverified; exchange `25-NSE` documents are not parsed yet, so exchange-filed delistings stay unresolved under the status rule (P6.4b; issuer `25` works at filing + 10 days); Commission postponement is not observable (residual risk); Form 25 is only attributable for single-security issuers; `identity_conflicts` need owner reconciliation tooling.
