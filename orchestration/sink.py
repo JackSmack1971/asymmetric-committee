@@ -11,26 +11,35 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import date, datetime
 from uuid import UUID
 
 from sqlalchemy import Engine, func, select
 
+from contracts.benchmarks import BenchmarkResult
 from contracts.commitment import CommitmentMaterial
-from contracts.enums import RunMode, RunStatus
+from contracts.enums import OutcomeCompleteness, RunMode, RunStatus
 from contracts.errors import ResetRefusedError
-from contracts.market_data import ExecutionReference, HaltReference, HaltSymbolSet
+from contracts.market_data import (
+    BenchmarkPeriodReference,
+    ExecutionReference,
+    HaltReference,
+    HaltSymbolSet,
+)
 from contracts.models import (
+    BenchmarkReplayContext,
     CommitmentAnchor,
     DlqRecord,
     ExecutionRecord,
     KillSwitchEvent,
+    OutcomeRecord,
     PortfolioSnapshot,
     ProposedBook,
     RunRecord,
     StepArtifacts,
     VerdictRecord,
 )
+from evaluation.scorable import Completeness, ScoringTicket
 from store import write
 
 
@@ -50,6 +59,10 @@ class DecisionSink:
             write.insert_kill_switch_events(conn, step.kill_switch)
             if step.commitment is not None:
                 write.insert_commitment(conn, step.commitment)
+            if step.benchmark_replay_context is not None:
+                if step.commitment is None:
+                    raise ValueError("benchmark replay context requires an atomic commitment")
+                write.insert_benchmark_replay_context(conn, step.benchmark_replay_context)
 
     def load_run(self, run_id: UUID) -> RunRecord | None:
         with self._engine.connect() as conn:
@@ -80,6 +93,19 @@ class DecisionSink:
         with self._engine.begin() as conn:
             return write.insert_execution_references(conn, rows)
 
+    def record_benchmark_period_references(self, rows: Sequence[BenchmarkPeriodReference]) -> int:
+        """Persist immutable same-run endpoint references for weekly benchmark replay."""
+        with self._engine.begin() as conn:
+            return write.insert_benchmark_period_references(conn, rows)
+
+    def load_benchmark_period_references(self, run_id: UUID) -> list[BenchmarkPeriodReference]:
+        with self._engine.connect() as conn:
+            return write.load_benchmark_period_references(conn, run_id)
+
+    def load_benchmark_replay_context(self, run_id: UUID) -> BenchmarkReplayContext | None:
+        with self._engine.connect() as conn:
+            return write.load_benchmark_replay_context(conn, run_id)
+
     def record_halt_symbol_set(self, symbol_set: HaltSymbolSet) -> int:
         with self._engine.begin() as conn:
             return write.insert_halt_symbol_set(conn, symbol_set)
@@ -87,6 +113,48 @@ class DecisionSink:
     def record_halt_references(self, rows: Sequence[HaltReference]) -> int:
         with self._engine.begin() as conn:
             return write.insert_halt_references(conn, rows)
+
+    def record_outcomes(
+        self,
+        rows: Sequence[OutcomeRecord],
+        *,
+        completeness: OutcomeCompleteness,
+        requested_at: datetime,
+    ) -> int:
+        """Append a scoring batch and any COMPLETE status transition atomically."""
+        with self._engine.begin() as conn:
+            return write.persist_outcomes(
+                conn,
+                rows,
+                completeness=completeness,
+                requested_at=requested_at,
+            )
+
+    def record_benchmarks(
+        self,
+        rows: Sequence[BenchmarkResult],
+        *,
+        expected_weeks: Sequence[date],
+        ticket: ScoringTicket,
+    ) -> int:
+        """Persist a complete enum-driven benchmark grid as immutable replay evidence."""
+        expected = (
+            OutcomeCompleteness.COMPLETE
+            if ticket.completeness is Completeness.COMPLETE
+            else OutcomeCompleteness.HALTED
+        )
+        if any(
+            row.run_id != ticket.run_id
+            or row.commitment_sha256 != ticket.commitment_sha256
+            or row.outcome_cutoff != ticket.requested_at
+            or row.completeness is not expected
+            or not isinstance(row.replay_inputs.get("trial_identity"), dict)
+            or row.replay_inputs["trial_identity"].get("mode") != ticket.mode.value
+            for row in rows
+        ):
+            raise ValueError("benchmark rows do not match the admitted scoring ticket")
+        with self._engine.begin() as conn:
+            return write.insert_benchmark_results(conn, rows, expected_weeks=expected_weeks)
 
     def record_anchor(self, anchor: CommitmentAnchor) -> None:
         """Upgrade an existing anchor (proof, git commit, Bitcoin confirmation). It never moves the

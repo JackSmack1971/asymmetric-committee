@@ -218,6 +218,20 @@ class ExecutionReference(_Observed):
         return self
 
 
+class BenchmarkPeriodReference(ExecutionReference):
+    """Same-run reference at the endpoint of one weekly benchmark period (§12.3)."""
+
+    period_start: date
+
+    @model_validator(mode="after")
+    def _ordered_period(self) -> Self:
+        if self.ref_time is not None and self.available_at < self.ref_time:
+            raise ValueError("benchmark endpoint cannot be available before its reference time")
+        if self.session_date is not None and self.session_date <= self.period_start:
+            raise ValueError("benchmark period endpoint must be after period_start")
+        return self
+
+
 class HaltReferenceRequest(Contract):
     """Written in the halt transaction. It never holds symbols: the sweeper reconstructs them."""
 

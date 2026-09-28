@@ -74,6 +74,9 @@ _REFERENCE_TASKS = {
     ReferenceJob.DGS3MO: "orchestration.sync_dgs3mo",
     ReferenceJob.REFERENCES: "orchestration.capture_due_references",
     ReferenceJob.HALT_SWEEP: "orchestration.sweep_halt_references",
+    ReferenceJob.CORPORATE_ACTIONS: "orchestration.sync_corporate_actions",
+    ReferenceJob.LISTING_STATUS: "orchestration.poll_listing_status",
+    ReferenceJob.DELISTINGS: "orchestration.derive_delistings",
 }
 
 

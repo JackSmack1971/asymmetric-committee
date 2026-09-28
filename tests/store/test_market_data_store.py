@@ -25,6 +25,7 @@ from contracts.enums import (
 )
 from contracts.errors import ImmutableConflictError
 from contracts.market_data import (
+    BenchmarkPeriodReference,
     ExecutionReference,
     HaltReference,
     HaltSymbolSet,
@@ -343,6 +344,35 @@ def test_references_are_insert_only_and_idempotent(db: Connection) -> None:
         db.execute(text("DELETE FROM execution_references"))
 
 
+def test_benchmark_period_references_are_cutoff_bounded_and_immutable(db: Connection) -> None:
+    run = make_run(db)
+    base = ref(run, session_date=date(2024, 3, 11), ref_time=et(2024, 3, 11, 10, 0))
+    endpoint = BenchmarkPeriodReference(
+        **{
+            **base.model_dump(),
+            "available_at": datetime(2024, 3, 11, 16, 0, tzinfo=UTC),
+        },
+        period_start=date(2024, 3, 4),
+    )
+    assert write.insert_benchmark_period_references(db, [endpoint]) == 1
+    assert write.insert_benchmark_period_references(db, [endpoint]) == 0
+    assert as_of.benchmark_period_references(
+        db, run, as_of=datetime(2024, 3, 11, 17, 0, tzinfo=UTC)
+    ) == [endpoint]
+    assert (
+        as_of.benchmark_period_references(db, run, as_of=datetime(2024, 3, 11, 15, 0, tzinfo=UTC))
+        == []
+    )
+    with pytest.raises(DBAPIError, match="insert-only"), db.begin_nested():
+        db.execute(
+            text("UPDATE benchmark_period_references SET price = 1 WHERE run_id=:run"),
+            {"run": run},
+        )
+    conflicting = endpoint.model_copy(update={"price": 513.0})
+    with pytest.raises(ImmutableConflictError):
+        write.insert_benchmark_period_references(db, [conflicting])
+
+
 def test_exact_semantic_replay_does_not_false_conflict_after_a_round_trip(db: Connection) -> None:
     run = make_run(db)
     write.insert_execution_references(db, [ref(run)])
@@ -603,7 +633,9 @@ def test_pending_requests_clear_only_when_every_symbol_has_a_reference(db: Conne
 
 def test_no_new_writer_uses_the_silent_do_nothing_path() -> None:
     source = Path(write.__file__).read_text(encoding="utf-8")
-    tail = source[source.index("# --- market-data foundations (P6.3)") :]
+    tail = source[
+        source.index("# --- market-data foundations (P6.3)") : source.index("def persist_outcomes(")
+    ]
     assert "_insert(" not in tail.replace("_insert_immutable(", "") and "_insert_rows(" not in tail
     names = re.findall(r"def (insert_\w+)\(", tail)
     assert {

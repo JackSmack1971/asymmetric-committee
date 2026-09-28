@@ -32,6 +32,9 @@ from contracts.enums import (
 from contracts.models import (
     AgentVerdict,
     AgentWeight,
+    BenchmarkForecastBundle,
+    BenchmarkReplayContext,
+    CalibrationFit,
     CioDecision,
     CioNameDecisionLLM,
     CommitmentAnchor,
@@ -41,7 +44,9 @@ from contracts.models import (
     DlqRecord,
     EvidenceRef,
     ExecutionRecord,
+    HorizonPool,
     KillSwitchEvent,
+    PooledForecast,
     PortfolioSnapshot,
     ProposedBook,
     ProposedPosition,
@@ -233,7 +238,79 @@ TABLES = (
     "decision_commitments",
     "dlq_records",
     "kill_switch_events",
+    "benchmark_replay_contexts",
 )
+
+
+def test_replay_context_commits_atomically_without_changing_commitment_hash(
+    engine: Engine, sid: int
+) -> None:
+    run_id = uuid4()
+    artifact = step(run_id, sid)
+    assert artifact.portfolio is not None
+    committed_run = artifact.run.model_copy(
+        update={"status": RunStatus.COMMITTED, "ended_at": AS_OF}
+    )
+    committed_hash = commitment_hash(committed_run, artifact.decisions, artifact.portfolio)
+    artifact = artifact.model_copy(
+        update={
+            "run": committed_run,
+            "commitment": DecisionCommitment(
+                run_id=run_id, sha256=committed_hash, committed_at=AS_OF
+            ),
+        }
+    )
+    context = BenchmarkReplayContext(
+        run_id=run_id,
+        random_bundles=(
+            BenchmarkForecastBundle(
+                security_id=sid,
+                entity_token=TOKEN,
+                agent_verdicts=(verdict(run_id),),
+                pooled_forecast=PooledForecast(
+                    entity_token=TOKEN,
+                    pools=tuple(
+                        HorizonPool(
+                            horizon=horizon,
+                            logit=0.1,
+                            lambda_t=0.0,
+                            dispersion=0.1,
+                            weights=(AgentWeight(agent=AgentName.VALUE, weight=1.0),),
+                        )
+                        for horizon in Horizon
+                    ),
+                ),
+                bear_severity=BearSeverity.HIGH,
+            ),
+        ),
+        calibration_fits=(
+            CalibrationFit(
+                horizon=Horizon.D21,
+                alpha=0.0,
+                beta=1.0,
+                active=False,
+                independent_periods=0,
+                observations=0,
+                base_rate=None,
+            ),
+        ),
+        sizing_horizon=Horizon.D21,
+        risk_config_snapshot={"max_position": 0.08},
+        feature_set_versions=("fs_v1",),
+        gate_model_versions=(),
+        evaluation_parameters_sha256="a" * 64,
+    )
+    artifact = artifact.model_copy(update={"benchmark_replay_context": context})
+    assert artifact.commitment is not None
+    assert artifact.portfolio is not None
+    assert artifact.commitment.sha256 == commitment_hash(
+        artifact.run, artifact.decisions, artifact.portfolio
+    )
+
+    sink = DecisionSink(engine)
+    sink.flush_step(artifact)
+    assert sink.load_benchmark_replay_context(run_id) == context
+    assert counts(engine)["benchmark_replay_contexts"] == 1
 
 
 def counts(engine: Engine) -> dict[str, int]:
@@ -252,6 +329,7 @@ def test_flush_writes_the_whole_step(engine: Engine, sid: int) -> None:
         "decision_commitments": 1,
         "dlq_records": 1,
         "kill_switch_events": 1,
+        "benchmark_replay_contexts": 0,
     }
     with engine.connect() as c:
         served: Any = c.execute(

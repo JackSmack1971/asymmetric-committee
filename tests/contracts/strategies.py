@@ -311,6 +311,17 @@ outcome_record = st.builds(
     sector_fwd_return=floats(-1.0, 100.0),
     scored_at=aware_dt,
 )
+resolved_forecast_outcome = st.builds(
+    m.ResolvedForecastOutcome,
+    run_id=uuids,
+    security_id=security_id,
+    agent=voting_agent,
+    horizon=st.sampled_from(Horizon),
+    forecast=prob,
+    outperformed=st.booleans(),
+    committed_at=aware_dt,
+    resolved_at=aware_dt,
+)
 
 
 @st.composite
@@ -399,6 +410,35 @@ commitment_anchor = st.builds(
 
 
 @st.composite
+def benchmark_forecast_bundle(draw: st.DrawFn) -> m.BenchmarkForecastBundle:
+    verdict = draw(agent_verdict)
+    forecast = draw(pooled_forecast).model_copy(update={"entity_token": verdict.entity_token})
+    return m.BenchmarkForecastBundle(
+        security_id=draw(st.integers(min_value=1, max_value=100_000)),
+        entity_token=verdict.entity_token,
+        agent_verdicts=(verdict,),
+        pooled_forecast=forecast,
+        bear_severity=draw(st.none() | st.sampled_from(list(BearSeverity))),
+    )
+
+
+@st.composite
+def benchmark_replay_context(draw: st.DrawFn) -> m.BenchmarkReplayContext:
+    bundle = draw(benchmark_forecast_bundle())
+    fit = draw(calibration_fit).model_copy(update={"horizon": Horizon.D21})
+    return m.BenchmarkReplayContext(
+        run_id=bundle.agent_verdicts[0].run_id,
+        random_bundles=(bundle,),
+        calibration_fits=(fit,),
+        sizing_horizon=Horizon.D21,
+        risk_config_snapshot={"k": 0.02},
+        feature_set_versions=("fs_v1",),
+        gate_model_versions=("gate_v1",),
+        evaluation_parameters_sha256=draw(sha),
+    )
+
+
+@st.composite
 def step_artifacts(draw: st.DrawFn) -> m.StepArtifacts:
     run = draw(run_record())
     rid = run.run_id
@@ -450,6 +490,8 @@ STRATEGIES: dict[type[m.Contract], st.SearchStrategy[Any]] = {
     m.HorizonPool: horizon_pool,
     m.PooledForecast: pooled_forecast,
     m.CalibrationFit: calibration_fit,
+    m.BenchmarkForecastBundle: benchmark_forecast_bundle(),
+    m.BenchmarkReplayContext: benchmark_replay_context(),
     m.ErrorCorrelation: error_correlation,
     m.ProposedPosition: proposed_position,
     m.ProposedBook: proposed_book,
@@ -462,6 +504,7 @@ STRATEGIES: dict[type[m.Contract], st.SearchStrategy[Any]] = {
     m.TaskKey: task_key,
     m.DecisionCommitment: decision_commitment,
     m.OutcomeRecord: outcome_record,
+    m.ResolvedForecastOutcome: resolved_forecast_outcome,
     m.AgentScore: agent_score(),
     m.VerdictRecord: verdict_record,
     m.CommitteeDecisionRecord: committee_decision_record,

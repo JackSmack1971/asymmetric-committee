@@ -302,6 +302,9 @@ def test_multi_step_run_commits_one_atomic_flush_per_step() -> None:
     for step in sink.steps:
         assert step.run.mode is RunMode.BACKTEST and step.run.status is RunStatus.COMMITTED
         assert step.commitment is not None and step.portfolio is not None  # invariant 5
+        assert step.benchmark_replay_context is not None
+        assert len(step.benchmark_replay_context.calibration_fits) == 3
+        assert step.benchmark_replay_context.feature_set_versions
         assert len(step.verdicts) == 4 * 5 + 4  # 5 voters x 4 names + red team on all 4
         assert len(step.decisions) == 4 * 3  # 4 names x horizons 5/21/63
         book = step.portfolio.book

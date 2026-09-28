@@ -1,0 +1,88 @@
+# CODEOWNERS — automatically requests reviews from owners of changed paths.
+# Docs: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+#
+# Rules:
+#   - Syntax: <pattern> @username @org/team (+email addresses work too)
+#   - Later rules take precedence over earlier rules for matching files.
+#   - Patterns follow the same rules as .gitignore, but are anchored to the
+#     repository root and always match (a leading "/" makes anchoring explicit).
+#   - Files can have multiple owners; all matching owners are requested.
+#   - Keep patterns sorted from general to specific — the LAST match wins.
+
+#######################################
+# Default — everything not matched below
+#######################################
+
+*                       @JackSmack1971
+
+#######################################
+# Repository meta and automation
+#######################################
+
+/.github/                @JackSmack1971
+/.github/workflows/      @JackSmack1971
+/.gitignore              @JackSmack1971
+/CODEOWNERS              @JackSmack1971
+
+#######################################
+# Documentation
+#######################################
+
+/docs/                  @JackSmack1971
+*.md                    @JackSmack1971
+/README.md              @JackSmack1971
+
+#######################################
+# Core source directories
+# Replace these example mappings with your real layout.
+#######################################
+
+/src/                   @JackSmack1971
+/src/core/              @JackSmack1971
+/src/api/               @JackSmack1971
+/src/cli/               @JackSmack1971
+
+#######################################
+# Configuration and deployment
+#######################################
+
+/config/                @JackSmack1971
+/docker*                @JackSmack1971
+/deploy/                @JackSmack1971
+/infra/                 @JackSmack1971
+
+#######################################
+# Tests
+#######################################
+
+/tests/                 @JackSmack1971
+**/*_test.*             @JackSmack1971
+**/test_*.py             @JackSmack1971
+
+#######################################
+# High-risk files — require senior review
+#######################################
+
+/security/              @JackSmack1971
+**/Dockerfile            @JackSmack1971
+/package.json            @JackSmack1971
+/requirements*.txt       @JackSmack1971
+/CHANGELOG.md            @JackSmack1971
+/LICENSE                 @JackSmack1971
+
+#######################################
+# Individual file example
+#######################################
+
+# A single critical file with an individual owner:
+#/src/bootstrap.py       @octocat
+
+#######################################
+# Notes
+#######################################
+# 1. If a file matches multiple rules, only the owners from the LAST matching
+#    rule are requested — there is no merging of rules.
+# 2. If a team is in an organization, prefix it: @org/team-name. Teams must
+#    have visible membership for CODEOWNERS to work.
+# 3. Escape special characters in filenames using \ before the character.
+# 4. Uncomment and adapt the example rules above to your repository layout.

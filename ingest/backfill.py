@@ -27,6 +27,7 @@ import redis
 from sqlalchemy import Connection
 
 from config.loader import UniverseConfig, load_universe
+from contracts.data import SicObservation
 from contracts.enums import FeedName
 from ingest import edgar_form4, edgar_submissions, edgar_xbrl
 from ingest.alpaca import AlpacaBars
@@ -47,6 +48,7 @@ from store.write import (
     insert_insider_txns,
     insert_news,
     insert_price_bars,
+    insert_sic_observations,
     record_feed_run,
     set_listing,
 )
@@ -155,6 +157,19 @@ def run(
             sector=sector,
             industry=company.sic_description,
         )
+        if company.sic is not None:
+            insert_sic_observations(
+                conn,
+                [
+                    SicObservation(
+                        security_id=sid,
+                        sic=company.sic,
+                        event_time=now,
+                        available_at=now,
+                        source_version=f"sec-submissions-sic-{company.sic}",
+                    )
+                ],
+            )
         names.append((t.ticker, sid, company))
     conn.commit()
     summary.securities = len(names)

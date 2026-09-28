@@ -1,0 +1,108 @@
+name: Bug Report
+description: Report something that is broken or behaving unexpectedly.
+title: "[Bug]: "
+labels: ["bug", "triage"]
+projects: []
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please fill out every section below.
+        Incomplete reports slow down triage and may be closed.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of what the bug is.
+      placeholder: What happened? What did you expect to happen instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Minimal, ordered steps anyone can follow to trigger the bug.
+      placeholder: |
+        1. Go to '...'
+        2. Run '...'
+        3. Observe '...'
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What you expected to happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened. Include error messages, stack traces, or logs.
+      render: shell
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      description: How much does this bug impact your work?
+      options:
+        - Critical — data loss, security issue, or total outage
+        - Major — core feature broken, workaround exists
+        - Minor — inconvenience, edge case, or cosmetic
+        - Unknown — not sure yet
+      default: 3
+    validations:
+      required: true
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: Environment
+      description: Where did the bug occur? Select all that apply.
+      multiple: true
+      options:
+        - Production
+        - Staging
+        - Local development
+        - CI / build pipeline
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version / Commit
+      description: Release tag, branch, or commit SHA where the bug was observed.
+      placeholder: e.g. v1.4.2 or a1b2c3d
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Screenshots, configuration, related issues, or anything else that helps.
+      placeholder: Optional
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-Submission Checks
+      description: Please confirm each item before submitting.
+      options:
+        - label: I searched existing issues and found no duplicate report for this bug.
+          required: true
+        - label: I reproduced the bug on the most recent release or commit.
+          required: false

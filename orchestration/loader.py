@@ -18,13 +18,16 @@ import logging
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
-from sqlalchemy import Engine
+from sqlalchemy import Connection, Engine
 
 from agents.partitioner import AliasMasker
 from agents.partitions import EntityData, Partitioner, assign_entity_tokens
+from committee.pooling import AgentHistory
 from contracts.data import FeatureRow, InsiderTxn, NewsItem, PriceBar
-from contracts.enums import Horizon
+from contracts.enums import AgentName, Horizon
+from contracts.models import ResolvedForecastOutcome
 from features.builder import FEATURE_SET_VERSION
 from orchestration.pipeline import StepInputs
 from store import as_of as point_in_time
@@ -42,6 +45,42 @@ class EmptyUniverseError(RuntimeError):
     """No usable universe at ``as_of``: a run must not commit an empty book from missing data."""
 
 
+def stacker_history(
+    horizon: Horizon, observations: Sequence[ResolvedForecastOutcome]
+) -> dict[AgentName, AgentHistory]:
+    """Convert already cutoff-resolved typed store rows into the committee history shape.
+
+    Multiple securities in one run form one independent period; overlapping horizons conservatively
+    divide periods by the number of weekly windows they span (1, 4, or 13).
+    """
+    forecasts: dict[AgentName, list[float]] = defaultdict(list)
+    targets: dict[AgentName, list[int]] = defaultdict(list)
+    periods: dict[AgentName, set[UUID]] = defaultdict(set)
+    for row in observations:
+        if row.horizon is not horizon:
+            continue
+        forecasts[row.agent].append(row.forecast)
+        targets[row.agent].append(int(row.outperformed))
+        periods[row.agent].add(row.run_id)
+    overlap = max(1, (int(horizon) + 4) // 5)
+    return {
+        agent: AgentHistory(
+            forecasts=tuple(forecasts[agent]),
+            outcomes=tuple(targets[agent]),
+            independent_periods=len(periods[agent]) // overlap,
+        )
+        for agent in forecasts
+    }
+
+
+def load_stacker_history(
+    conn: Connection, as_of: datetime, horizon: Horizon
+) -> dict[AgentName, AgentHistory]:
+    """Read historical labels and their committed forecasts through the canonical as-of store."""
+    observations = point_in_time.resolved_forecast_outcomes(conn, as_of, horizon)
+    return stacker_history(horizon, observations)
+
+
 class StoreStepLoader:
     def __init__(
         self,
@@ -50,11 +89,13 @@ class StoreStepLoader:
         brands: Mapping[int, Sequence[str]],
         base_rates: Mapping[Horizon, float] | None = None,
         feature_set_version: str = FEATURE_SET_VERSION,
+        gate_model_versions: Sequence[str] = (),
     ) -> None:
         self._engine = engine
         self._brands = brands
         self._base_rates = base_rates or dict.fromkeys(Horizon, 0.5)
         self._version = feature_set_version
+        self._gate_versions = tuple(sorted(set(gate_model_versions)))
 
     def load(self, as_of: datetime) -> StepInputs:
         # One snapshot for every read of the step, so the inputs are mutually consistent.
@@ -125,6 +166,7 @@ class StoreStepLoader:
                 regime=None,
             ),
             base_rates=self._base_rates,
+            gate_model_versions=self._gate_versions,
         )
 
 

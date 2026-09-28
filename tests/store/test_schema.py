@@ -12,7 +12,7 @@ from sqlalchemy import Connection, Engine, Table, inspect, text
 from sqlalchemy.exc import DBAPIError
 
 from store import _tables as t
-from store.write import insert_fundamentals
+from store import write
 from tests.store import factories as f
 
 BITEMPORAL = {"event_time", "available_at", "ingested_at", "source_version"}
@@ -28,6 +28,7 @@ def test_every_section_4_3_table_exists(pg_engine: Engine) -> None:
     names = set(inspect(pg_engine).get_table_names())
     spec = {
         "securities",
+        "sic_history",
         "universe_snapshots",
         "price_bars",
         "fundamentals_asfiled",
@@ -42,6 +43,8 @@ def test_every_section_4_3_table_exists(pg_engine: Engine) -> None:
         "orders",
         "fills",
         "outcomes",
+        "benchmark_results",
+        "benchmark_replay_contexts",
         "agent_scores",
         "feed_health",
         "trading_calendar",
@@ -49,6 +52,7 @@ def test_every_section_4_3_table_exists(pg_engine: Engine) -> None:
         "tbill_rates",
         "tbill_vintage_coverage",
         "execution_references",
+        "benchmark_period_references",
         "halt_reference_requests",
         "halt_reference_symbol_sets",
         "halt_references",
@@ -73,19 +77,40 @@ def test_fact_tables_are_bitemporal_and_indexed(pg_engine: Engine, table: Table)
 
 def test_fundamentals_are_insert_only(db: Connection) -> None:
     sid = f.security(db)
-    insert_fundamentals(db, [f.fact(sid, available_at=f.T0, accn=f.accession(1))])
+    write.insert_fundamentals(db, [f.fact(sid, available_at=f.T0, accn=f.accession(1))])
     with pytest.raises(DBAPIError, match="insert-only"), db.begin_nested():
         db.execute(text("UPDATE fundamentals_asfiled SET value = 2"))
     with pytest.raises(DBAPIError, match="insert-only"), db.begin_nested():
         db.execute(text("DELETE FROM fundamentals_asfiled"))
 
 
+def test_sic_observations_are_insert_only(db: Connection) -> None:
+    sid = f.security(db)
+    row = f.sic_observation(sid, sic=3571, observed_at=f.T0)
+    write.insert_sic_observations(db, [row])
+    with pytest.raises(DBAPIError, match="insert-only"), db.begin_nested():
+        db.execute(text("UPDATE sic_history SET sic = 6021"))
+    with pytest.raises(DBAPIError, match="insert-only"), db.begin_nested():
+        db.execute(text("DELETE FROM sic_history"))
+
+
+def test_benchmark_results_are_insert_only(db: Connection) -> None:
+    assert "benchmark_results" in inspect(db).get_table_names()
+    trigger: str = db.execute(
+        text(
+            "SELECT tgname FROM pg_trigger WHERE tgrelid='benchmark_results'::regclass "
+            "AND tgname='benchmark_results_immutable' AND NOT tgisinternal"
+        )
+    ).scalar_one()
+    assert trigger == "benchmark_results_immutable"
+
+
 def test_reingest_is_a_noop(db: Connection) -> None:
     sid = f.security(db)
     row = f.fact(sid, available_at=f.T0, accn=f.accession(1))
-    assert insert_fundamentals(db, [row]) == 1
+    assert write.insert_fundamentals(db, [row]) == 1
     changed = row.model_copy(update={"value": 99.0})  # same natural key + accession
-    assert insert_fundamentals(db, [changed]) == 0
+    assert write.insert_fundamentals(db, [changed]) == 0
     assert db.execute(text("SELECT value FROM fundamentals_asfiled")).scalar_one() == 1.0
 
 

@@ -20,6 +20,7 @@ from contracts.enums import (
     Tape,
 )
 from contracts.market_data import (
+    BenchmarkPeriodReference,
     CalendarCoverage,
     ExecutionReference,
     HaltReference,
@@ -138,6 +139,17 @@ def test_a_backtest_reference_is_a_sip_trade_with_time_and_tape() -> None:
     with pytest.raises(ValidationError):
         _ref(trade_time=None)
     _ref(mode=RefMode.LIVE, source=ReferenceSource.IEX_MID, trade_time=None, trade_tape=None)
+
+
+def test_benchmark_period_reference_is_same_run_and_ends_after_its_start() -> None:
+    start = date(2024, 3, 4)
+    endpoint = BenchmarkPeriodReference(
+        **_ref(session_date=date(2024, 3, 11)).model_dump(), period_start=start
+    )
+    assert endpoint.run_id == RUN
+    assert endpoint.period_start == start
+    with pytest.raises(ValidationError, match="after period_start"):
+        BenchmarkPeriodReference(**_ref(session_date=start).model_dump(), period_start=start)
 
 
 def test_only_calendar_uncovered_may_lack_the_reference_day() -> None:

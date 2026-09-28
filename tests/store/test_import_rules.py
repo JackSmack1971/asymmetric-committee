@@ -9,6 +9,11 @@ from pathlib import Path
 
 import pytest
 
+from tests.store.import_linter_fixtures import (
+    configured_import_linter,
+    make_import_linter_tree,
+)
+
 ROOT = Path(__file__).resolve().parents[2]
 LINT = shutil.which("lint-imports")
 DOWNSTREAM = {"agents", "features", "gate", "committee", "risk", "evaluation", "universe"}
@@ -37,6 +42,15 @@ def test_repo_keeps_the_contracts() -> None:
     assert result.returncode == 0, result.stdout
 
 
+def test_synthetic_tree_covers_all_configured_local_contract_modules(tmp_path: Path) -> None:
+    make_import_linter_tree(tmp_path, {})
+    root_packages, modules = configured_import_linter()
+    assert all((tmp_path / package / "__init__.py").is_file() for package in root_packages)
+    assert all(
+        tmp_path.joinpath(*module.split(".")).with_suffix(".py").is_file() for module in modules
+    )
+
+
 @pytest.mark.skipif(LINT is None, reason="import-linter not installed")
 @pytest.mark.parametrize("bad_import", ["import sqlalchemy", "from store import _tables"])
 def test_a_raw_db_import_in_risk_is_rejected(tmp_path: Path, bad_import: str) -> None:
@@ -56,25 +70,9 @@ def test_a_raw_db_import_in_risk_is_rejected(tmp_path: Path, bad_import: str) ->
     assert "BROKEN" in result.stdout
 
 
-def _tree(tmp_path: Path, files: dict[str, str]) -> None:
-    shutil.copy(ROOT / "pyproject.toml", tmp_path)
-    cfg = tomllib.loads((ROOT / "pyproject.toml").read_text())
-    for pkg in cfg["tool"]["importlinter"]["root_packages"]:
-        (tmp_path / pkg).mkdir()
-        (tmp_path / pkg / "__init__.py").write_text("")
-    (tmp_path / "store" / "_tables.py").write_text("")
-    (tmp_path / "evaluation" / "scorable.py").write_text("")
-    (tmp_path / "evaluation" / "anchoring.py").write_text("")
-    (tmp_path / "evaluation" / "calendar_rules.py").write_text("")
-    (tmp_path / "evaluation" / "tbill_rules.py").write_text("")
-    (tmp_path / "store" / "write.py").write_text("")
-    for name, body in files.items():
-        (tmp_path / name).write_text(body)
-
-
 @pytest.mark.skipif(LINT is None, reason="import-linter not installed")
 def test_sink_is_the_only_orchestration_writer(tmp_path: Path) -> None:
-    _tree(tmp_path, {"orchestration/sink.py": "from store import write\n"})
+    make_import_linter_tree(tmp_path, {"orchestration/sink.py": "from store import write\n"})
     assert _lint(tmp_path).returncode == 0
 
 
@@ -88,7 +86,7 @@ def test_sink_is_the_only_orchestration_writer(tmp_path: Path) -> None:
     ],
 )
 def test_other_modules_cannot_write_or_open_the_db(tmp_path: Path, path: str, body: str) -> None:
-    _tree(tmp_path, {path: body})
+    make_import_linter_tree(tmp_path, {path: body})
     result = _lint(tmp_path)
     assert result.returncode != 0
     assert "BROKEN" in result.stdout
@@ -105,10 +103,15 @@ def test_other_modules_cannot_write_or_open_the_db(tmp_path: Path, path: str, bo
     ],
 )
 def test_the_scorability_gate_stays_pure(tmp_path: Path, body: str) -> None:
-    _tree(tmp_path, {"evaluation/scorable.py": body})
-    for name in ("as_of.py", "scoring_read.py"):
-        (tmp_path / "store" / name).write_text("")
-    (tmp_path / "orchestration" / "sink.py").write_text("")
+    make_import_linter_tree(
+        tmp_path,
+        {
+            "evaluation/scorable.py": body,
+            "store/as_of.py": "",
+            "store/scoring_read.py": "",
+            "orchestration/sink.py": "",
+        },
+    )
     result = _lint(tmp_path)
     assert result.returncode != 0
     assert "BROKEN" in result.stdout

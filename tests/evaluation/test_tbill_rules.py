@@ -4,9 +4,18 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 
+import pytest
+
 from contracts.market_data import TBillObservation, TBillVintageCoverage
 from evaluation.calendar_rules import build_calendar
-from evaluation.tbill_rules import TBillRate, TBillUnresolved, Unresolved, select_rate
+from evaluation.tbill_rules import (
+    TBillPeriodReturn,
+    TBillRate,
+    TBillUnresolved,
+    Unresolved,
+    accrue_period,
+    select_rate,
+)
 from tests.market_data_support import coverage_for, sessions_2024
 
 SESSIONS = sessions_2024()
@@ -43,7 +52,7 @@ def test_the_rate_is_the_latest_observation_at_or_before_the_previous_session() 
     ]
     got = select_rate(rows, coverage(), date(2024, 3, 11), CAL)
     # previous session of Mon 11 Mar is Fri 8 Mar, but its vintage is dated 11 Mar (same day)
-    assert got == TBillRate(date(2024, 3, 7), date(2024, 3, 8), 5.21)
+    assert got == TBillRate(date(2024, 3, 7), date(2024, 3, 8), 5.21, "alfred:2024-03-08")
 
 
 def test_a_same_day_vintage_is_never_usable_without_release_time_evidence() -> None:
@@ -109,4 +118,56 @@ def test_an_uncovered_calendar_is_unresolved_never_guessed() -> None:
     rows = [obs(date(2024, 3, 7), date(2024, 3, 8), 5.2)]
     assert select_rate(rows, coverage(), date(2024, 3, 11), empty) == Unresolved(
         TBillUnresolved.CALENDAR_UNCOVERED
+    )
+
+
+def test_period_accrual_compounds_session_rates_with_replayable_vintages() -> None:
+    start = date(2024, 3, 7)
+    end = date(2024, 3, 12)
+    rows = [
+        obs(date(2024, 3, 6), date(2024, 3, 7), 5.0),
+        obs(date(2024, 3, 7), date(2024, 3, 8), 5.1),
+        obs(date(2024, 3, 8), date(2024, 3, 11), 5.2),
+        obs(date(2024, 3, 11), date(2024, 3, 12), 5.3),
+    ]
+    result = accrue_period(
+        rows,
+        coverage(),
+        start,
+        end,
+        CAL,
+        cutoff=datetime(2025, 1, 1, tzinfo=UTC),
+    )
+    expected = (1 + 0.05) ** (1 / 365) * (1 + 0.051) ** (3 / 365) * (1 + 0.052) ** (1 / 365) - 1
+    assert isinstance(result, TBillPeriodReturn)
+    assert result.value == pytest.approx(expected)
+    assert [step.rate.source_version for step in result.steps] == [
+        "alfred:2024-03-07",
+        "alfred:2024-03-08",
+        "alfred:2024-03-11",
+    ]
+    assert [step.accrual_session for step in result.steps] == [
+        date(2024, 3, 8),
+        date(2024, 3, 11),
+        date(2024, 3, 12),
+    ]
+
+
+def test_period_accrual_refuses_missing_rate_and_late_vintage_coverage() -> None:
+    start = date(2024, 3, 7)
+    end = date(2024, 3, 12)
+    rows: list[TBillObservation] = []
+    assert isinstance(
+        accrue_period(rows, coverage(), start, end, CAL, cutoff=datetime(2025, 1, 1, tzinfo=UTC)),
+        Unresolved,
+    )
+    late_coverage = coverage().model_copy(
+        update={"established_at": datetime(2025, 1, 2, tzinfo=UTC)}
+    )
+    rows = [obs(date(2024, 3, 6), date(2024, 3, 7), 5.0)]
+    assert isinstance(
+        accrue_period(
+            rows, late_coverage, start, end, CAL, cutoff=datetime(2025, 1, 1, tzinfo=UTC)
+        ),
+        Unresolved,
     )

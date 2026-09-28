@@ -3,28 +3,86 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-from datetime import timedelta
+from datetime import UTC, datetime, time, timedelta
 from typing import Any
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import Engine, text
 
 from contracts.commitment import MaterialDefectKind, verify_material
+from contracts.data import SicObservation
 from contracts.enums import RunMode, RunStatus
 from contracts.models import CommitmentAnchor, StepArtifacts
 from evaluation import scorable as s
 from orchestration.sink import DecisionSink
-from store import scoring_read
+from store import as_of, scoring_read, write
 from tests.evaluation.test_scorable import Git, Loader
 from tests.orchestration.anchoring_support import GIT_COMMIT, BlockHeaders, confirmed_proof
 from tests.orchestration.test_sink import AS_OF, run_record
 from tests.orchestration.test_store_anchoring import committed, halt
 from tests.store import factories as f
+from tests.store import factories as store_factories
 
 ANCHORED_AT = AS_OF + timedelta(hours=1)
 BLOCK_TIME = int((AS_OF + timedelta(hours=2)).timestamp())
 NOW = AS_OF + timedelta(days=30)
+
+
+def test_ticket_bounded_bar_range_and_sic_history_are_point_in_time(db: Any) -> None:
+    sid = store_factories.security(db)
+    start = AS_OF.date()
+    end = start + timedelta(days=2)
+    before = AS_OF - timedelta(days=2)
+    late = AS_OF + timedelta(days=1)
+    write.insert_sic_observations(
+        db,
+        [
+            SicObservation(
+                security_id=sid,
+                sic=3571,
+                event_time=datetime.combine(before.date(), datetime.min.time(), UTC),
+                available_at=before,
+                source_version="sic-1",
+            ),
+            SicObservation(
+                security_id=sid,
+                sic=6021,
+                event_time=datetime.combine(late.date(), datetime.min.time(), UTC),
+                available_at=late,
+                source_version="sic-2",
+            ),
+        ],
+    )
+    eastern = ZoneInfo("America/New_York")
+    outside_date = start - timedelta(days=1)
+    bars = [
+        store_factories.bar(sid, outside_date).model_copy(
+            update={
+                "event_time": datetime.combine(outside_date, time(16), eastern),
+                "available_at": AS_OF,
+            }
+        ),
+        store_factories.bar(sid, start).model_copy(
+            update={
+                "event_time": datetime.combine(start, time(16), eastern),
+                "available_at": AS_OF,
+            }
+        ),
+        store_factories.bar(sid, end).model_copy(
+            update={
+                "event_time": datetime.combine(end, time(16), eastern),
+                "available_at": AS_OF + timedelta(days=1),
+            }
+        ),
+    ]
+    write.insert_price_bars(db, bars)
+
+    sic = as_of.sic_history(db, sid, AS_OF)
+    assert sic is not None and sic.sic == 3571
+    bars = as_of.prices_between(db, [sid], start, end, AS_OF)
+    assert [bar.event_time.date() for bar in bars] == [start]
 
 
 @pytest.fixture

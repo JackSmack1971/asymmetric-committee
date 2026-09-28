@@ -7,8 +7,10 @@ write ``model_served``, ``run_id`` or any weight (invariants 6 and 7).
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import date, datetime
-from typing import Annotated, Literal, Self
+from typing import Annotated, Any, Literal, Self
 from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
@@ -25,6 +27,7 @@ from contracts.enums import (
     KillTrigger,
     OrderKind,
     OrderSide,
+    OutcomeCompleteness,
     ReferenceSource,
     RunMode,
     RunStatus,
@@ -344,6 +347,75 @@ class CalibrationFit(Contract):
     base_rate: Probability | None  # trailing base rate anchoring alpha; None when not fitted
 
 
+class BenchmarkForecastBundle(Contract):
+    """Immutable whole-name inputs used by P6.6 random-committee permutations."""
+
+    security_id: SecurityId
+    entity_token: EntityToken
+    agent_verdicts: tuple[AgentVerdict, ...] = Field(min_length=1)
+    pooled_forecast: PooledForecast
+    bear_severity: BearSeverity | None
+
+    @model_validator(mode="after")
+    def _same_entity(self) -> Self:
+        if self.pooled_forecast.entity_token != self.entity_token:
+            raise ValueError("pooled forecast token does not match benchmark bundle")
+        if any(verdict.entity_token != self.entity_token for verdict in self.agent_verdicts):
+            raise ValueError("agent verdict token does not match benchmark bundle")
+        if any(verdict.run_id != self.agent_verdicts[0].run_id for verdict in self.agent_verdicts):
+            raise ValueError("benchmark bundle spans runs")
+        agents = [verdict.agent for verdict in self.agent_verdicts]
+        if len(agents) != len(set(agents)):
+            raise ValueError("benchmark bundle has duplicate agent verdicts")
+        return self
+
+
+class BenchmarkReplayContext(Contract):
+    """Durable run-time sizing and version evidence, outside P6.5 commitment material."""
+
+    run_id: UUID
+    random_bundles: tuple[BenchmarkForecastBundle, ...] = Field(min_length=1)
+    calibration_fits: tuple[CalibrationFit, ...] = Field(min_length=1)
+    sizing_horizon: Horizon
+    risk_config_snapshot: dict[str, Any]
+    feature_set_versions: tuple[Label, ...] = Field(min_length=1)
+    # Empty means the producer did not supply verifiable gate evidence; scoring fails closed.
+    gate_model_versions: tuple[Label, ...]
+    evaluation_parameters_sha256: Sha256Hex
+
+    @model_validator(mode="after")
+    def _canonical_evidence(self) -> Self:
+        horizons = [fit.horizon for fit in self.calibration_fits]
+        if len(horizons) != len(set(horizons)):
+            raise ValueError("benchmark replay context has duplicate calibration horizons")
+        if self.sizing_horizon not in horizons:
+            raise ValueError("replay context lacks the configured sizing horizon fit")
+        if len({bundle.security_id for bundle in self.random_bundles}) != len(self.random_bundles):
+            raise ValueError("benchmark replay context has duplicate random bundles")
+        if any(
+            verdict.run_id != self.run_id
+            for bundle in self.random_bundles
+            for verdict in bundle.agent_verdicts
+        ):
+            raise ValueError("benchmark replay bundle belongs to another run")
+        if tuple(sorted(self.feature_set_versions)) != self.feature_set_versions:
+            raise ValueError("feature-set versions must be sorted")
+        if tuple(sorted(self.gate_model_versions)) != self.gate_model_versions:
+            raise ValueError("gate-model versions must be sorted")
+        if len(set(self.feature_set_versions)) != len(self.feature_set_versions):
+            raise ValueError("feature-set versions must be unique")
+        if len(set(self.gate_model_versions)) != len(self.gate_model_versions):
+            raise ValueError("gate-model versions must be unique")
+        return self
+
+    @property
+    def evidence_sha256(self) -> str:
+        canonical = json.dumps(
+            self.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+        ).encode()
+        return hashlib.sha256(canonical).hexdigest()
+
+
 class ErrorCorrelation(Contract):
     """Agent error correlation and effective agent count for one horizon (§7.3)."""
 
@@ -510,10 +582,33 @@ class OutcomeRecord(Contract):
     fwd_return: Annotated[float, Field(ge=-1.0, allow_inf_nan=False)]
     sector_fwd_return: Annotated[float, Field(ge=-1.0, allow_inf_nan=False)]
     scored_at: AwareDatetime
+    resolved_at: AwareDatetime | None = None
+    completeness: OutcomeCompleteness = OutcomeCompleteness.COMPLETE
+    revision_id: int = Field(default=1, ge=1)
+    evidence_revision_sha256: Sha256Hex | None = None
+
+    @model_validator(mode="after")
+    def _resolved(self) -> Self:
+        if self.resolved_at is None:
+            object.__setattr__(self, "resolved_at", self.scored_at)
+        return self
 
     @property
     def excess_return(self) -> float:
         return self.fwd_return - self.sector_fwd_return
+
+
+class ResolvedForecastOutcome(Contract):
+    """One admitted, cutoff-resolved forecast/label pair for the stacker history feed."""
+
+    run_id: UUID
+    security_id: SecurityId
+    agent: AgentName
+    horizon: Horizon
+    forecast: Probability
+    outperformed: bool
+    committed_at: AwareDatetime
+    resolved_at: AwareDatetime
 
 
 class AgentScore(Contract):
@@ -624,6 +719,7 @@ class StepArtifacts(Contract):
     decisions: tuple[CommitteeDecisionRecord, ...] = ()
     portfolio: PortfolioSnapshot | None = None
     commitment: DecisionCommitment | None = None
+    benchmark_replay_context: BenchmarkReplayContext | None = None
     dlq: tuple[DlqRecord, ...] = ()
     kill_switch: tuple[KillSwitchEvent, ...] = ()
 
@@ -637,6 +733,10 @@ class StepArtifacts(Contract):
             ids.append(self.portfolio.run_id)
         if self.commitment:
             ids.append(self.commitment.run_id)
+        if self.benchmark_replay_context is not None:
+            ids.append(self.benchmark_replay_context.run_id)
         if any(i != rid for i in ids):
             raise ValueError("artifact belongs to a different run")
+        if self.benchmark_replay_context is not None and self.commitment is None:
+            raise ValueError("benchmark replay context must be committed atomically")
         return self

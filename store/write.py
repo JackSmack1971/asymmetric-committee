@@ -28,13 +28,30 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import insert
 
+from contracts.benchmarks import (
+    BenchmarkResult,
+    assert_benchmark_completeness,
+    assert_benchmark_variant_completeness,
+)
 from contracts.commitment import CommitmentIntegrityError, CommitmentMaterial
+from contracts.corporate_actions import (
+    WITHDRAWN,
+    AssetStatusObservation,
+    CorporateAction,
+    CorporateActionCoverage,
+    Delisting,
+    DelistingFiling,
+    IdentityConflict,
+    SecuritySymbol,
+    actions_sha256,
+)
 from contracts.data import (
     FeatureRow,
     FundamentalFact,
     InsiderTxn,
     NewsItem,
     PriceBar,
+    SicObservation,
     UniverseMember,
 )
 from contracts.enums import (
@@ -42,9 +59,12 @@ from contracts.enums import (
     TERMINAL_ORDER_STATUSES,
     AgentName,
     FeedName,
+    KnowledgeBasis,
+    OutcomeCompleteness,
     RunMode,
     RunStatus,
     SecurityKind,
+    SymbolSource,
     halt_reason,
 )
 from contracts.errors import (
@@ -54,6 +74,7 @@ from contracts.errors import (
     RunHaltedError,
 )
 from contracts.market_data import (
+    BenchmarkPeriodReference,
     CalendarCoverage,
     ExecutionReference,
     HaltReference,
@@ -66,6 +87,7 @@ from contracts.market_data import (
 )
 from contracts.models import (
     AgentVerdict,
+    BenchmarkReplayContext,
     CommitmentAnchor,
     CommitteeDecisionRecord,
     DecisionCommitment,
@@ -73,6 +95,7 @@ from contracts.models import (
     ExecutionRecord,
     GateDecision,
     KillSwitchEvent,
+    OutcomeRecord,
     PortfolioSnapshot,
     ProposedBook,
     RedTeamVerdict,
@@ -93,7 +116,7 @@ def _row(model: BaseModel, table: Table) -> dict[str, Any]:
         if isinstance(v, Enum):
             v = v.value
         elif isinstance(v, tuple):
-            v = list(v)
+            v = [x.value if isinstance(x, Enum) else x for x in v]
         out[k] = v
     return out
 
@@ -112,6 +135,13 @@ def _insert(conn: Connection, table: Table, models: Sequence[BaseModel]) -> int:
 
 def insert_price_bars(conn: Connection, rows: Sequence[PriceBar]) -> int:
     return _insert(conn, t.price_bars, rows)
+
+
+def insert_sic_observations(conn: Connection, rows: Sequence[SicObservation]) -> int:
+    """Append first-observed SIC snapshots; a changed observation is a new version/time."""
+    return _insert_immutable(
+        conn, t.sic_history, rows, ("security_id", "event_time", "source_version")
+    )
 
 
 def insert_fundamentals(conn: Connection, rows: Sequence[FundamentalFact]) -> int:
@@ -164,20 +194,69 @@ def ensure_security(
     name: str,
     sector: str | None = None,
     industry: str | None = None,
+    at: datetime | None = None,
 ) -> int:
-    """Create or refresh a security (reference data, not a fact) and return its id."""
-    stmt = insert(t.securities).values(
-        ticker=ticker, cik=cik, name=name, sector=sector, industry=industry
+    """Create or refresh an equity (reference data, not a fact) and return its id.
+
+    Identity never follows the ticker alone and never the CIK alone (one issuer can list several
+    classes). A security of this CIK whose *current* ticker is ``ticker`` is refreshed; otherwise a
+    new security is created. Continuity across a rename comes only from an explicit name-change
+    action (`apply_name_change`), never from matching a retired symbol, so a new class or an
+    unrelated issuer that reuses a retired ticker stays a distinct security.
+
+    The new security's ``seed`` symbol row starts at the beginning of time, unless another security
+    ever held the ticker: then it starts on the creation date (``at``), so dated attribution never
+    gives the new security the earlier holder's history.
+    """
+    at = at or datetime.now(UTC)
+    c = t.securities.c
+    current = conn.execute(
+        select(c.security_id).where(
+            c.cik == cik, c.ticker == ticker, c.kind == SecurityKind.EQUITY.value
+        )
+    ).scalar_one_or_none()
+    if current is not None:
+        conn.execute(
+            t.securities.update()
+            .where(c.security_id == current)
+            .values(name=name, sector=sector, industry=industry)
+        )
+        return int(current)
+    sym = t.security_symbols.c
+    reused = conn.execute(select(sym.security_id).where(sym.symbol == ticker).limit(1)).first()
+    sid: int = int(
+        conn.execute(
+            insert(t.securities)
+            .values(ticker=ticker, cik=cik, name=name, sector=sector, industry=industry)
+            .returning(c.security_id)
+        ).scalar_one()
     )
-    upsert = stmt.on_conflict_do_update(
-        constraint="uq_securities_cik_ticker",
-        set_={
-            "name": stmt.excluded.name,
-            "sector": stmt.excluded.sector,
-            "industry": stmt.excluded.industry,
-        },
-    ).returning(t.securities.c.security_id)
-    return int(conn.execute(upsert).scalar_one())
+    start = at.astimezone(UTC).date() if reused is not None else date(1, 1, 1)
+    _seed_symbol(conn, sid, ticker, at, valid_from=start)
+    return sid
+
+
+def _seed_symbol(
+    conn: Connection,
+    sid: int,
+    ticker: str,
+    at: datetime | None,
+    *,
+    valid_from: date = date(1, 1, 1),
+) -> None:
+    insert_security_symbols(
+        conn,
+        [
+            SecuritySymbol(
+                security_id=sid,
+                symbol=ticker,
+                valid_from=valid_from,
+                source=SymbolSource.SEED,
+                source_ref="ensure_security",
+                available_at=at or datetime.now(UTC),
+            )
+        ],
+    )
 
 
 def ensure_reference_instrument(
@@ -192,7 +271,15 @@ def ensure_reference_instrument(
         index_where=t.securities.c.kind != SecurityKind.EQUITY.value,
         set_={"name": stmt.excluded.name},
     ).returning(t.securities.c.security_id)
-    return int(conn.execute(upsert).scalar_one())
+    sid: int = int(conn.execute(upsert).scalar_one())
+    sym = t.security_symbols.c
+    if conn.execute(select(sym.security_id).where(sym.security_id == sid).limit(1)).first() is None:
+        reused = conn.execute(select(sym.security_id).where(sym.symbol == ticker).limit(1)).first()
+        now = datetime.now(UTC)
+        _seed_symbol(
+            conn, sid, ticker, now, valid_from=now.date() if reused is not None else date(1, 1, 1)
+        )
+    return sid
 
 
 def set_listing(
@@ -959,6 +1046,133 @@ def insert_execution_references(conn: Connection, rows: Sequence[ExecutionRefere
     return _insert_immutable(conn, t.execution_references, rows, ("run_id", "symbol_ref"))
 
 
+def insert_benchmark_period_references(
+    conn: Connection, rows: Sequence[BenchmarkPeriodReference]
+) -> int:
+    """Insert same-run weekly endpoint evidence; exact replay is a no-op, conflicts fail."""
+    return _insert_immutable(conn, t.benchmark_period_references, rows, ("run_id", "symbol_ref"))
+
+
+def load_benchmark_period_references(
+    conn: Connection, run_id: UUID
+) -> list[BenchmarkPeriodReference]:
+    c = t.benchmark_period_references.c
+    rows = conn.execute(
+        select(t.benchmark_period_references).where(c.run_id == run_id).order_by(c.symbol_ref)
+    ).mappings()
+    return [
+        BenchmarkPeriodReference.model_validate(
+            {key: value for key, value in dict(row).items() if key != "ingested_at"}
+        )
+        for row in rows
+    ]
+
+
+def insert_benchmark_results(
+    conn: Connection, rows: Sequence[BenchmarkResult], *, expected_weeks: Sequence[date]
+) -> int:
+    """Persist one complete enum-driven batch; identical replay is idempotent and conflicts fail."""
+    if not rows:
+        raise ValueError("benchmark result batch cannot be empty")
+    run_ids = {row.run_id for row in rows}
+    commitments = {row.commitment_sha256 for row in rows}
+    cutoffs = {row.outcome_cutoff for row in rows}
+    completeness = {row.completeness for row in rows}
+    if len(run_ids) != 1 or len(commitments) != 1 or len(cutoffs) != 1 or len(completeness) != 1:
+        raise ValueError("benchmark batch must have one run and commitment identity")
+    run_id = next(iter(run_ids))
+    commitment_sha256 = next(iter(commitments))
+    cutoff = next(iter(cutoffs))
+    result_completeness = next(iter(completeness))
+    result_keys = ((row.week_start, row.benchmark, row.variant) for row in rows)
+    if result_completeness is OutcomeCompleteness.HALTED:
+        assert_benchmark_variant_completeness(result_keys, expected_weeks)
+    else:
+        assert_benchmark_completeness(result_keys, expected_weeks)
+    run_row = conn.execute(select(t.runs).where(t.runs.c.run_id == run_id)).mappings().one_or_none()
+    commitment_row = (
+        conn.execute(
+            select(t.decision_commitments).where(t.decision_commitments.c.run_id == run_id)
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if run_row is None or commitment_row is None:
+        raise ValueError("benchmark results require a stored run and decision commitment")
+    if commitment_row["sha256"] != commitment_sha256 or commitment_row["committed_at"] > cutoff:
+        raise ValueError("benchmark results do not match a cutoff-eligible commitment")
+    anchor_row = (
+        conn.execute(select(t.commitment_anchors).where(t.commitment_anchors.c.run_id == run_id))
+        .mappings()
+        .one_or_none()
+    )
+    mode = RunMode(run_row["mode"])
+    status = RunStatus(run_row["status"])
+    if anchor_row is None or anchor_row["sha256"] != commitment_sha256:
+        raise ValueError("benchmark results require the matching durable commitment anchor")
+    if anchor_row["anchored_at"] > cutoff:
+        raise ValueError("benchmark outcome cutoff precedes its durable anchor")
+    if result_completeness is OutcomeCompleteness.COMPLETE:
+        allowed_statuses = (
+            (RunStatus.EXECUTED, RunStatus.SCORED)
+            if mode is RunMode.LIVE
+            else (RunStatus.ANCHORED, RunStatus.SCORED)
+        )
+        if status not in allowed_statuses:
+            raise ValueError("COMPLETE benchmark results require an admitted complete run")
+        scope: set[int] = set(
+            conn.execute(
+                select(t.committee_decisions.c.security_id)
+                .where(t.committee_decisions.c.run_id == run_id)
+                .distinct()
+            ).scalars()
+        )
+        latest = (
+            select(
+                t.outcomes.c.security_id,
+                t.outcomes.c.horizon,
+                func.max(t.outcomes.c.revision_id).label("revision_id"),
+            )
+            .where(t.outcomes.c.run_id == run_id, t.outcomes.c.resolved_at <= cutoff)
+            .group_by(t.outcomes.c.security_id, t.outcomes.c.horizon)
+            .subquery()
+        )
+        resolved: set[int] = set(
+            conn.execute(
+                select(t.outcomes.c.security_id)
+                .select_from(
+                    latest.join(t.outcomes, t.outcomes.c.revision_id == latest.c.revision_id)
+                )
+                .where(
+                    t.outcomes.c.run_id == run_id,
+                    t.outcomes.c.completeness == OutcomeCompleteness.COMPLETE.value,
+                )
+                .group_by(t.outcomes.c.security_id)
+                .having(func.count(func.distinct(t.outcomes.c.horizon)) == 3)
+            ).scalars()
+        )
+        if not scope or not scope <= resolved:
+            raise ValueError("COMPLETE benchmark results require complete P6.5 outcomes for scope")
+    else:
+        if (
+            status is not RunStatus.PARTIAL
+            or not str(run_row["status_reason"] or "").startswith(HALT_REASON_PREFIX)
+            or conn.execute(
+                select(t.kill_switch_events.c.event_id)
+                .where(t.kill_switch_events.c.run_id == run_id)
+                .limit(1)
+            ).scalar_one_or_none()
+            is None
+        ):
+            raise ValueError("HALTED benchmark results require durable P6.5 halt evidence")
+    return _insert_immutable(
+        conn,
+        t.benchmark_results,
+        rows,
+        ("run_id", "week_start", "benchmark", "variant"),
+    )
+
+
 def insert_halt_reference_requests(conn: Connection, rows: Sequence[HaltReferenceRequest]) -> int:
     return _insert_immutable(conn, t.halt_reference_requests, rows, ("run_id", "trigger"))
 
@@ -969,3 +1183,328 @@ def insert_halt_symbol_set(conn: Connection, row: HaltSymbolSet) -> int:
 
 def insert_halt_references(conn: Connection, rows: Sequence[HaltReference]) -> int:
     return _insert_immutable(conn, t.halt_references, rows, ("run_id", "trigger", "symbol_ref"))
+
+
+def persist_outcomes(
+    conn: Connection,
+    rows: Sequence[OutcomeRecord],
+    *,
+    completeness: OutcomeCompleteness,
+    requested_at: datetime,
+) -> int:
+    """Append admitted outcome revisions and atomically promote only a complete run.
+
+    ``conn`` must be the caller's transaction. A complete batch must contain all three horizons
+    for each included security; the database trigger independently checks commitment, anchor,
+    run status, and the stored outcome set before allowing the status update.
+    """
+    if not rows:
+        raise ValueError("an outcome batch is nonempty")
+    run_ids = {row.run_id for row in rows}
+    if len(run_ids) != 1:
+        raise ValueError("an outcome batch contains one run")
+    run_id = next(iter(run_ids))
+    if any(row.scored_at < requested_at for row in rows):
+        raise ValueError("outcome scoring timestamp precedes its admission")
+    if any(row.resolved_at is None or row.resolved_at > requested_at for row in rows):
+        raise ValueError("outcome dependencies were not all known at the scoring cutoff")
+    grouped: dict[int, set[int]] = {}
+    for row in rows:
+        grouped.setdefault(row.security_id, set()).add(int(row.horizon))
+    if completeness is OutcomeCompleteness.COMPLETE and any(
+        horizons != {5, 21, 63} for horizons in grouped.values()
+    ):
+        raise ValueError("complete outcomes require horizons 5, 21, and 63 for every security")
+    payloads: list[dict[str, Any]] = []
+    for row in rows:
+        material = row.model_dump(mode="json", exclude={"revision_id", "evidence_revision_sha256"})
+        material["completeness"] = completeness.value
+        digest = hashlib.sha256(
+            json.dumps(material, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        payload = row.model_dump(mode="python", exclude={"revision_id", "evidence_revision_sha256"})
+        payload["completeness"] = completeness.value
+        payload["evidence_revision_sha256"] = digest
+        payloads.append(payload)
+    stmt = (
+        insert(t.outcomes)
+        .values(payloads)
+        .on_conflict_do_nothing(constraint="uq_outcomes_revision")
+        .returning(t.outcomes.c.revision_id)
+    )
+    inserted = len(conn.execute(stmt).all())
+    if completeness is OutcomeCompleteness.COMPLETE:
+        result = conn.execute(
+            update(t.runs)
+            .where(
+                t.runs.c.run_id == run_id, t.runs.c.status.in_(("ANCHORED", "EXECUTED", "SCORED"))
+            )
+            .values(status=RunStatus.SCORED.value)
+        )
+        if result.rowcount != 1:
+            raise ValueError("only a complete ANCHORED/EXECUTED/SCORED run can be scored")
+    return inserted
+
+
+# --- corporate actions + delistings (P6.4): immutable, conflict-checked writers -----------------
+
+
+def insert_security_symbols(conn: Connection, rows: Sequence[SecuritySymbol]) -> int:
+    return _insert_immutable(
+        conn, t.security_symbols, rows, ("security_id", "symbol", "valid_from")
+    )
+
+
+def apply_name_change(conn: Connection, row: SecuritySymbol) -> IdentityConflict | None:
+    """Record that ``row.security_id`` trades as ``row.symbol`` from ``row.valid_from``.
+
+    The same ``security_id`` continues (identity never follows the ticker) and
+    ``securities.ticker`` (the current-ticker convenience column) moves once the change is
+    effective. If another security already holds the new ticker (e.g. the SEC seed list created it
+    before the provider's name change arrived), nothing about either security changes: an
+    `IdentityConflict` is recorded (insert-only evidence for owner reconciliation) and returned.
+    Callers apply this after the action and its coverage are committed, so a conflict never rolls
+    them back.
+    """
+    if row.source is not SymbolSource.NAME_CHANGE:
+        raise ValueError("apply_name_change records name-change continuity only")
+    c = t.securities.c
+    sym = t.security_symbols.c
+    holder = conn.execute(
+        select(c.security_id).where(c.ticker == row.symbol, c.security_id != row.security_id)
+    ).scalar_one_or_none()
+    if holder is None:
+        holder = conn.execute(
+            select(sym.security_id)
+            .where(
+                sym.symbol == row.symbol,
+                sym.security_id != row.security_id,
+                sym.valid_from >= row.valid_from,
+            )
+            .limit(1)
+        ).scalar_one_or_none()
+    if holder is not None:
+        conflict = IdentityConflict(
+            security_id=row.security_id,
+            symbol=row.symbol,
+            valid_from=row.valid_from,
+            source_ref=row.source_ref,
+            holder_security_id=int(holder),
+            detected_at=row.available_at,
+        )
+        _insert_immutable(
+            conn,
+            t.identity_conflicts,
+            [conflict],
+            ("security_id", "symbol", "valid_from", "source_ref"),
+        )
+        return conflict
+    with conn.begin_nested():
+        insert_security_symbols(conn, [row])
+        latest: str = conn.execute(
+            select(sym.symbol)
+            .where(
+                sym.security_id == row.security_id,
+                sym.valid_from <= row.available_at.astimezone(UTC).date(),
+            )
+            .order_by(sym.valid_from.desc(), sym.available_at.desc())
+            .limit(1)
+        ).scalar_one()
+        conn.execute(
+            t.securities.update().where(c.security_id == row.security_id).values(ticker=latest)
+        )
+    return None
+
+
+def _latest_action_rows(
+    conn: Connection, basis: KnowledgeBasis, *where: Any
+) -> dict[str, dict[str, Any]]:
+    """Latest stored row per provider action id (any time), within one knowledge basis."""
+    c = t.corporate_actions.c
+    rows = conn.execute(
+        select(t.corporate_actions)
+        .where(c.knowledge_basis == basis.value, *where)
+        .order_by(c.provider_action_id, c.available_at.desc())
+    ).mappings()
+    out: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        out.setdefault(r["provider_action_id"], dict(r))
+    return out
+
+
+def record_action_query(
+    conn: Connection,
+    *,
+    coverages: Sequence[CorporateActionCoverage],
+    observed: Sequence[CorporateAction],
+) -> int:
+    """Persist one complete action query: observed versions, withdrawals and coverage, atomically.
+
+    Called only after every page of the query succeeded. Per security in ``coverages``:
+
+    * an observed action is written (``available_at`` = ``established_at``) unless the latest
+      stored row of the same knowledge basis already carries that exact version;
+    * an action whose latest row is live, lies in the covered ``process_date`` range and was not
+      returned now gets an explicit ``withdrawn`` row (never a deletion);
+    * the coverage row vouches for exactly the observed ``(id, version)`` set.
+    """
+    if not coverages:
+        raise ValueError("a query without coverage writes nothing")
+    stamp = {(cv.established_at, cv.knowledge_basis) for cv in coverages}
+    if len(stamp) != 1:
+        raise ValueError("one query has one established_at and one knowledge basis")
+    ((established, basis),) = stamp
+    by_sid: dict[int, list[CorporateAction]] = {}
+    for a in observed:
+        if a.withdrawn or a.available_at != established or a.knowledge_basis is not basis:
+            raise ValueError("observed actions share their query's time and basis and are live")
+        by_sid.setdefault(a.security_id, []).append(a)
+    covered = {cv.security_id: cv for cv in coverages}
+    if len(covered) != len(coverages):
+        raise ValueError("one coverage row per security per query")
+    for sid in by_sid:
+        if sid not in covered:
+            raise ValueError(f"action for security {sid} outside the query's coverage")
+    for sid, cv in covered.items():
+        mine = by_sid.get(sid, [])
+        pairs = [(a.provider_action_id, a.source_version) for a in mine]
+        if cv.action_count != len(mine) or cv.actions_sha256 != actions_sha256(pairs):
+            raise ValueError(f"coverage for security {sid} does not describe its actions")
+        for a in mine:
+            if not cv.range_start <= a.process_date <= cv.range_end:
+                raise ValueError(f"action {a.provider_action_id} outside the covered range")
+
+    c = t.corporate_actions.c
+    written = 0
+    with conn.begin_nested():
+        for sid, cv in covered.items():
+            live = {a.provider_action_id: a for a in by_sid.get(sid, [])}
+            latest = _latest_action_rows(
+                conn,
+                basis,
+                c.security_id == sid,
+                c.available_at <= established,
+            )
+            fresh = [
+                a
+                for aid, a in live.items()
+                if aid not in latest
+                or latest[aid]["withdrawn"]
+                or latest[aid]["source_version"] != a.source_version
+            ]
+            # A withdrawal needs a comparable query: same security (dated attribution), same
+            # basis, the prior process date inside this range, and the prior action's own symbol
+            # explicitly inside this query's symbol scope. All types and complete quality are
+            # guaranteed by the coverage contract.
+            gone = [
+                _withdrawal(row, cv)
+                for aid, row in latest.items()
+                if aid not in live
+                and not row["withdrawn"]
+                and cv.range_start <= row["process_date"] <= cv.range_end
+                and row["subject_symbol"] in cv.symbols
+            ]
+            written += _insert_immutable(
+                conn,
+                t.corporate_actions,
+                [*fresh, *gone],
+                ("provider", "provider_action_id", "available_at"),
+            )
+        _insert_immutable(
+            conn,
+            t.corporate_action_coverage,
+            coverages,
+            ("provider", "security_id", "range_start", "range_end", "established_at"),
+        )
+    return written
+
+
+def _withdrawal(row: Mapping[str, Any], cv: CorporateActionCoverage) -> CorporateAction:
+    data = {k: v for k, v in row.items() if k != "ingested_at"}
+    data.update(
+        withdrawn=True,
+        source_version=f"{WITHDRAWN}:{cv.source_version}"[:128],
+        available_at=cv.established_at,
+        knowledge_basis=cv.knowledge_basis,
+    )
+    return CorporateAction.model_validate(data)
+
+
+def insert_asset_status(conn: Connection, rows: Sequence[AssetStatusObservation]) -> int:
+    return _insert_immutable(
+        conn, t.asset_status_observations, rows, ("security_id", "observed_at")
+    )
+
+
+def insert_delisting_filings(conn: Connection, rows: Sequence[DelistingFiling]) -> int:
+    return _insert_immutable(conn, t.delisting_filings, rows, ("cik", "accession"))
+
+
+def record_delisting(conn: Connection, row: Delisting) -> int:
+    """Append a derived conclusion unless the latest one (same basis) is already identical.
+
+    A changed conclusion (e.g. consideration that supersedes an earlier default) is a new row;
+    the earlier row stays for audit and sensitivity reporting.
+    """
+    c = t.delistings.c
+    latest = conn.execute(
+        select(c.source_version, c.available_at)
+        .where(c.security_id == row.security_id, c.knowledge_basis == row.knowledge_basis.value)
+        .order_by(c.available_at.desc())
+        .limit(1)
+    ).first()
+    if latest is not None and latest.source_version == row.source_version:
+        return 0
+    if latest is not None and latest.available_at >= row.available_at:
+        raise ValueError("a delisting derivation cannot precede the latest stored one")
+    return _insert_immutable(conn, t.delistings, [row], ("security_id", "available_at"))
+
+
+def insert_benchmark_replay_context(conn: Connection, context: BenchmarkReplayContext) -> int:
+    """Persist immutable sizing/version evidence outside the P6.5 commitment payload."""
+    stmt = (
+        insert(t.benchmark_replay_contexts)
+        .values(
+            run_id=context.run_id,
+            replay_context=context.model_dump(mode="json"),
+            evidence_sha256=context.evidence_sha256,
+        )
+        .on_conflict_do_nothing()
+        .returning(literal(1))
+    )
+    inserted = int(conn.execute(stmt).scalar_one_or_none() or 0)
+    stored = (
+        conn.execute(
+            select(t.benchmark_replay_contexts).where(
+                t.benchmark_replay_contexts.c.run_id == context.run_id
+            )
+        )
+        .mappings()
+        .one()
+    )
+    persisted = BenchmarkReplayContext.model_validate(stored["replay_context"])
+    if persisted != context or stored["evidence_sha256"] != context.evidence_sha256:
+        raise ImmutableConflictError(
+            f"conflicting benchmark replay context for run {context.run_id}"
+        )
+    if persisted.evidence_sha256 != stored["evidence_sha256"]:
+        raise ValueError("stored benchmark replay context digest is invalid")
+    return inserted
+
+
+def load_benchmark_replay_context(conn: Connection, run_id: UUID) -> BenchmarkReplayContext | None:
+    row = (
+        conn.execute(
+            select(t.benchmark_replay_contexts).where(
+                t.benchmark_replay_contexts.c.run_id == run_id
+            )
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if row is None:
+        return None
+    context = BenchmarkReplayContext.model_validate(row["replay_context"])
+    if context.evidence_sha256 != row["evidence_sha256"]:
+        raise ValueError("stored benchmark replay context digest is invalid")
+    return context

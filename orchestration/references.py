@@ -35,6 +35,7 @@ from contracts.enums import (
     RunStatus,
 )
 from contracts.market_data import (
+    BenchmarkPeriodReference,
     ExecutionReference,
     HaltReference,
     HaltReferenceRequest,
@@ -155,6 +156,16 @@ class ReferenceCapture:
             have = {r.symbol_ref for r in point_in_time.execution_references(conn, run_id)}
         return [s for s in symbols if s not in have]
 
+    def _missing_period_references(
+        self, run_id: UUID, symbols: Sequence[str], now: datetime
+    ) -> list[str]:
+        with self._engine.connect() as conn:
+            have = {
+                row.symbol_ref
+                for row in point_in_time.benchmark_period_references(conn, run_id, as_of=now)
+            }
+        return [symbol for symbol in symbols if symbol not in have]
+
     def _reference_day(self, run: RunRecord, now: datetime) -> tuple[TradingSession, datetime]:
         """D0 = the next stored session after ``as_of``; raises when coverage is missing."""
         cal = self._calendar(now)
@@ -271,6 +282,95 @@ class ReferenceCapture:
         n = self._sink.record_execution_references(rows)
         return CaptureResult(CaptureState.WRITTEN, n)
 
+    def capture_benchmark_period(self, run_id: UUID, now: datetime) -> CaptureResult:
+        """Capture the original run's next weekly endpoint with its entry reference policy."""
+        run = self._sink.load_run(run_id)
+        if run is None:
+            raise ValueError(f"unknown run {run_id}")
+        committed_at = self._sink.load_committed_at(run_id)
+        if committed_at is None:
+            return CaptureResult(CaptureState.DEFERRED, detail="run has no commitment")
+        symbols = self._required(run)
+        with self._engine.connect().execution_options(isolation_level="REPEATABLE READ") as conn:
+            entry = point_in_time.execution_references(conn, run_id, as_of=now)
+        by_symbol = {reference.symbol_ref: reference for reference in entry}
+        if set(by_symbol) != set(symbols) or any(
+            reference.status is not RefStatus.RESOLVED or reference.session_date is None
+            for reference in by_symbol.values()
+        ):
+            return CaptureResult(CaptureState.DEFERRED, detail="entry references are incomplete")
+        period_starts = {reference.session_date for reference in by_symbol.values()}
+        if len(period_starts) != 1:
+            return CaptureResult(CaptureState.DEFERRED, detail="entry sessions disagree")
+        period_start = next(iter(period_starts))
+        assert period_start is not None
+        missing = self._missing_period_references(run_id, symbols, now)
+        if not missing:
+            return CaptureResult(CaptureState.COMPLETE)
+        try:
+            cal = self._calendar(now)
+            following_as_of = run.as_of.astimezone(ET).date() + timedelta(days=7)
+            endpoint_day = cal.d0(following_as_of)
+            session = cal.session(endpoint_day)
+            ref_time = session.open_at + self._delay
+        except CalendarCoverageError:
+            if now < committed_at + timedelta(minutes=self._cfg.calendar_coverage_wait_minutes):
+                return CaptureResult(CaptureState.DEFERRED, detail="endpoint calendar not covered")
+            rows = [
+                BenchmarkPeriodReference(
+                    run_id=run_id,
+                    symbol_ref=symbol,
+                    period_start=period_start,
+                    ref_time=None,
+                    mode=RefMode.LIVE if run.mode is RunMode.LIVE else RefMode.BACKTEST,
+                    session_date=None,
+                    available_at=now,
+                    source_version="benchmark_period_reference_v1",
+                    status=RefStatus.UNRESOLVED,
+                    reason=RefReason.CALENDAR_UNCOVERED,
+                )
+                for symbol in missing
+            ]
+            count = self._sink.record_benchmark_period_references(rows)
+            return CaptureResult(CaptureState.WRITTEN, count, "calendar_uncovered")
+        if now < ref_time:
+            return CaptureResult(
+                CaptureState.DEFERRED, detail="endpoint reference time not reached"
+            )
+
+        mode = RefMode.LIVE if run.mode is RunMode.LIVE else RefMode.BACKTEST
+        if mode is RefMode.LIVE:
+            expired = now > ref_time + timedelta(minutes=self._cfg.live_capture_grace_minutes)
+            observations = [
+                _unresolved(symbol, ref_time, RefReason.NO_REFERENCE_PRICE)
+                if expired
+                else resolve_live(self._quotes, symbol, now)
+                for symbol in missing
+            ]
+            observations = [
+                observation
+                for observation in observations
+                if expired or observation.status is RefStatus.RESOLVED
+            ]
+        else:
+            observations = self._backtest_observations(missing, session, ref_time)
+        rows = [
+            BenchmarkPeriodReference(
+                run_id=run_id,
+                symbol_ref=observation.symbol_ref,
+                period_start=period_start,
+                ref_time=ref_time,
+                mode=mode,
+                session_date=session.session_date,
+                available_at=now,
+                source_version="benchmark_period_reference_v1",
+                **_observed_fields(observation),  # type: ignore[arg-type]
+            )
+            for observation in observations
+        ]
+        count = self._sink.record_benchmark_period_references(rows) if rows else 0
+        return CaptureResult(CaptureState.WRITTEN if count else CaptureState.DEFERRED, count)
+
     def _backtest_observations(
         self, symbols: Sequence[str], session: TradingSession, ref_time: datetime
     ) -> list[ReferenceObservation]:
@@ -295,7 +395,7 @@ class ReferenceCapture:
         return out
 
     def capture_due(self, now: datetime, *, on_error: Callable[[UUID, Exception], None]) -> int:
-        """Poll every recent committed LIVE run once. One failing run never hides the others."""
+        """Poll due LIVE and offline period endpoints. One failing run never hides the others."""
         runs = self._sink.list_runs(mode=RunMode.LIVE, statuses=_LIVE_STATUSES)
         written = 0
         for run in runs:
@@ -305,8 +405,22 @@ class ReferenceCapture:
                 with self._sink.run_lock(run.run_id, "references") as got:
                     if got:  # another poller holds it: it will write the same rows
                         written += self.capture_live(run.run_id, now).written
+                        written += self.capture_benchmark_period(run.run_id, now).written
             except Exception as exc:
                 on_error(run.run_id, exc)
+        offline_statuses = (RunStatus.ANCHORED, RunStatus.SCORED, RunStatus.PARTIAL)
+        for mode in (RunMode.BACKTEST, RunMode.ABLATION):
+            for run in self._sink.list_runs(mode=mode, statuses=offline_statuses):
+                # The endpoint is one calendar week after the run's week-final close. Older
+                # admitted runs remain eligible for exact historical resolution and replay.
+                if now < run.as_of + timedelta(days=7):
+                    continue
+                try:
+                    with self._sink.run_lock(run.run_id, "benchmark_period_references") as got:
+                        if got:
+                            written += self.capture_benchmark_period(run.run_id, now).written
+                except Exception as exc:
+                    on_error(run.run_id, exc)
         return written
 
     # --- halt references -----------------------------------------------------------------------

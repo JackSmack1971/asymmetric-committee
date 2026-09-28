@@ -7,7 +7,7 @@ from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import Connection
 
-from contracts.data import FundamentalFact, InsiderTxn, NewsItem, PriceBar
+from contracts.data import FundamentalFact, InsiderTxn, NewsItem, PriceBar, SicObservation
 from contracts.enums import InsiderRole, InsiderTxnCode, NewsProviderName, PriceFeed
 from store.write import ensure_security
 
@@ -44,6 +44,18 @@ def fact(
         event_time=datetime.combine(period_end, datetime.min.time(), UTC),
         available_at=available_at,
         source_version=accn,
+    )
+
+
+def sic_observation(
+    sid: int, *, sic: int, observed_at: datetime, version: str | None = None
+) -> SicObservation:
+    return SicObservation(
+        security_id=sid,
+        sic=sic,
+        event_time=observed_at,
+        available_at=observed_at,
+        source_version=version or f"sec-sic-{sic}",
     )
 
 

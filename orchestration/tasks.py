@@ -143,6 +143,21 @@ class ReferenceIngests(Protocol):
     def run_dgs3mo(self, now: datetime) -> int: ...
 
 
+class JobOutcome(Protocol):
+    written: int
+    errors: list[str]
+
+
+class CorporateActionJobs(Protocol):
+    """P6.4: action polls with coverage, listing-status polls + Form 25, delisting derivation."""
+
+    def run_corporate_actions(self, now: datetime) -> JobOutcome: ...
+
+    def run_listing_status(self, now: datetime) -> JobOutcome: ...
+
+    def run_delistings(self, now: datetime) -> JobOutcome: ...
+
+
 class References(Protocol):
     """P6.3 run-scoped references: live capture polling, backtest builder, halt sweeper."""
 
@@ -179,6 +194,7 @@ class Runtime:
     ingest: Ingests | None = None
     reference_data: ReferenceIngests | None = None
     references: References | None = None
+    corporate_actions: CorporateActionJobs | None = None
 
 
 _runtime: Runtime | None = None
@@ -333,6 +349,34 @@ def sweep_halt_references(rt: Runtime, *, now: datetime | None = None) -> dict[s
     if errors:
         raise ReferenceJobFailedError("sweep_halt_references", errors)
     return {"written": written}
+
+
+def _corporate_actions(rt: Runtime) -> CorporateActionJobs:
+    if rt.corporate_actions is None:
+        raise RuntimeError("this worker has no corporate-actions runtime")
+    return rt.corporate_actions
+
+
+def _job(name: str, outcome: JobOutcome) -> dict[str, Any]:
+    """A failed unit wrote nothing and is retried at the next cadence, not immediately (the error
+    is not transient), so a provider outage cannot become a retry storm."""
+    if outcome.errors:
+        raise ReferenceJobFailedError(name, outcome.errors)
+    return {"written": outcome.written}
+
+
+def sync_corporate_actions(rt: Runtime, *, now: datetime | None = None) -> dict[str, Any]:
+    return _job(
+        "sync_corporate_actions", _corporate_actions(rt).run_corporate_actions(now or rt.clock())
+    )
+
+
+def poll_listing_status(rt: Runtime, *, now: datetime | None = None) -> dict[str, Any]:
+    return _job("poll_listing_status", _corporate_actions(rt).run_listing_status(now or rt.clock()))
+
+
+def derive_delistings(rt: Runtime, *, now: datetime | None = None) -> dict[str, Any]:
+    return _job("derive_delistings", _corporate_actions(rt).run_delistings(now or rt.clock()))
 
 
 def build_backtest_references(
@@ -517,6 +561,21 @@ def capture_due_references_task(self: Task[Any, Any]) -> dict[str, Any]:
 @app.task(name="orchestration.sweep_halt_references", **_COMMON)
 def sweep_halt_references_task(self: Task[Any, Any]) -> dict[str, Any]:
     return with_retry(self, lambda: sweep_halt_references(runtime()))
+
+
+@app.task(name="orchestration.sync_corporate_actions", **_COMMON)
+def sync_corporate_actions_task(self: Task[Any, Any]) -> dict[str, Any]:
+    return with_retry(self, lambda: sync_corporate_actions(runtime()))
+
+
+@app.task(name="orchestration.poll_listing_status", **_COMMON)
+def poll_listing_status_task(self: Task[Any, Any]) -> dict[str, Any]:
+    return with_retry(self, lambda: poll_listing_status(runtime()))
+
+
+@app.task(name="orchestration.derive_delistings", **_COMMON)
+def derive_delistings_task(self: Task[Any, Any]) -> dict[str, Any]:
+    return with_retry(self, lambda: derive_delistings(runtime()))
 
 
 @app.task(name="orchestration.build_backtest_references", **_COMMON)
