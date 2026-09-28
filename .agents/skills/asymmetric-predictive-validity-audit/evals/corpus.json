@@ -1,0 +1,785 @@
+{
+  "schema": "apva.eval.corpus.v1",
+  "skill": "asymmetric-predictive-validity-audit",
+  "protocol": {
+    "routing_repeats": 3,
+    "task_repeats": 5,
+    "recovery_repeats": 3
+  },
+  "routing_targets": {
+    "precision_min": 0.9,
+    "recall_min": 0.9,
+    "neighbor_false_activation_max": 0.15
+  },
+  "cases": [
+    {
+      "id": "route-pos-01",
+      "suite": "routing",
+      "routing_group": "positive",
+      "prompt": "Review our preregistration for a heterogeneous LLM committee that predicts next-day equity returns.",
+      "expected_activation": true
+    },
+    {
+      "id": "route-pos-02",
+      "suite": "routing",
+      "routing_group": "positive",
+      "prompt": "Does this multi-agent trading experiment actually isolate the value of assigning different roles to agents?",
+      "expected_activation": true
+    },
+    {
+      "id": "route-pos-03",
+      "suite": "routing",
+      "routing_group": "positive",
+      "prompt": "Audit our forward-test protocol for an LLM ensemble before we start collecting outcomes.",
+      "expected_activation": true
+    },
+    {
+      "id": "route-pos-04",
+      "suite": "routing",
+      "routing_group": "positive",
+      "prompt": "Check whether our committee backtest leaks information through revised fundamentals.",
+      "expected_activation": true
+    },
+    {
+      "id": "route-pos-05",
+      "suite": "routing",
+      "routing_group": "positive",
+      "prompt": "Are our single-agent and asymmetric-committee baselines matched fairly enough to claim incremental predictive value?",
+      "expected_activation": true
+    },
+    {
+      "id": "route-pos-06",
+      "suite": "routing",
+      "routing_group": "positive",
+      "prompt": "Review the multiplicity correction for 40 prompt variants and 12 market horizons in this LLM forecasting study.",
+      "expected_activation": true
+    },
+    {
+      "id": "route-pos-07",
+      "suite": "routing",
+      "routing_group": "positive",
+      "prompt": "Determine whether our LLM committee experiment is falsifiable before we preregister it.",
+      "expected_activation": true
+    },
+    {
+      "id": "route-pos-08",
+      "suite": "routing",
+      "routing_group": "positive",
+      "prompt": "Audit the calibration/test split for confidence-weighted committee forecasts.",
+      "expected_activation": true
+    },
+    {
+      "id": "route-pos-09",
+      "suite": "routing",
+      "routing_group": "positive",
+      "prompt": "Check whether our symmetric-committee ablation can identify the effect of role asymmetry.",
+      "expected_activation": true
+    },
+    {
+      "id": "route-pos-10",
+      "suite": "routing",
+      "routing_group": "positive",
+      "prompt": "Review point-in-time data provenance for this agent committee market-prediction benchmark.",
+      "expected_activation": true
+    },
+    {
+      "id": "route-pos-11",
+      "suite": "routing",
+      "routing_group": "positive",
+      "prompt": "Does our repeated holdout reuse invalidate the confirmatory claim for this LLM ensemble?",
+      "expected_activation": true
+    },
+    {
+      "id": "route-pos-12",
+      "suite": "routing",
+      "routing_group": "positive",
+      "prompt": "Audit the statistical design for comparing a committee’s probability forecasts against a single-model baseline.",
+      "expected_activation": true
+    },
+    {
+      "id": "route-pos-13",
+      "suite": "routing",
+      "routing_group": "positive",
+      "prompt": "Determine whether five models voting on crypto direction add value beyond matched inference compute.",
+      "expected_activation": true
+    },
+    {
+      "id": "route-pos-14",
+      "suite": "routing",
+      "routing_group": "positive",
+      "prompt": "Review our planned live forward test and restart rule for a multi-agent forecasting system.",
+      "expected_activation": true
+    },
+    {
+      "id": "route-pos-15",
+      "suite": "routing",
+      "routing_group": "positive",
+      "prompt": "Is it defensible to call this committee edge causal, or only predictive?",
+      "expected_activation": true
+    },
+    {
+      "id": "route-pos-16",
+      "suite": "routing",
+      "routing_group": "positive",
+      "prompt": "Audit whether selecting the best agent topology after seeing backtest results creates a data-snooping problem.",
+      "expected_activation": true
+    },
+    {
+      "id": "route-pos-17",
+      "suite": "routing",
+      "routing_group": "positive",
+      "prompt": "Check the research degrees of freedom in this asymmetric committee experiment.",
+      "expected_activation": true
+    },
+    {
+      "id": "route-pos-18",
+      "suite": "routing",
+      "routing_group": "positive",
+      "prompt": "Review whether our cost/slippage assumptions support the claimed economic value of the committee.",
+      "expected_activation": true
+    },
+    {
+      "id": "route-pos-19",
+      "suite": "routing",
+      "routing_group": "positive",
+      "prompt": "Audit whether changing model providers mid-forward-test breaks the protocol identity.",
+      "expected_activation": true
+    },
+    {
+      "id": "route-pos-20",
+      "suite": "routing",
+      "routing_group": "positive",
+      "prompt": "Decide whether this LLM forecasting design is ready to preregister.",
+      "expected_activation": true
+    },
+    {
+      "id": "route-neg-01",
+      "suite": "routing",
+      "routing_group": "negative",
+      "prompt": "Fix the Python typing errors in our trading bot.",
+      "expected_activation": false
+    },
+    {
+      "id": "route-neg-02",
+      "suite": "routing",
+      "routing_group": "negative",
+      "prompt": "Review this pull request for maintainability and security bugs.",
+      "expected_activation": false
+    },
+    {
+      "id": "route-neg-03",
+      "suite": "routing",
+      "routing_group": "negative",
+      "prompt": "Optimize our order-routing latency.",
+      "expected_activation": false
+    },
+    {
+      "id": "route-neg-04",
+      "suite": "routing",
+      "routing_group": "negative",
+      "prompt": "Refactor the agent orchestration code to reduce duplication.",
+      "expected_activation": false
+    },
+    {
+      "id": "route-neg-05",
+      "suite": "routing",
+      "routing_group": "negative",
+      "prompt": "Write unit tests for the committee aggregator.",
+      "expected_activation": false
+    },
+    {
+      "id": "route-neg-06",
+      "suite": "routing",
+      "routing_group": "negative",
+      "prompt": "Explain how majority voting works in ensemble methods.",
+      "expected_activation": false
+    },
+    {
+      "id": "route-neg-07",
+      "suite": "routing",
+      "routing_group": "negative",
+      "prompt": "Recommend the best current LLM for financial news summarization.",
+      "expected_activation": false
+    },
+    {
+      "id": "route-neg-08",
+      "suite": "routing",
+      "routing_group": "negative",
+      "prompt": "Create a trading strategy using RSI and moving averages.",
+      "expected_activation": false
+    },
+    {
+      "id": "route-neg-09",
+      "suite": "routing",
+      "routing_group": "negative",
+      "prompt": "Debug why our Alpaca API orders are rejected.",
+      "expected_activation": false
+    },
+    {
+      "id": "route-neg-10",
+      "suite": "routing",
+      "routing_group": "negative",
+      "prompt": "Improve the UI for our backtesting dashboard.",
+      "expected_activation": false
+    },
+    {
+      "id": "route-neg-11",
+      "suite": "routing",
+      "routing_group": "negative",
+      "prompt": "Summarize this paper about multi-agent debate.",
+      "expected_activation": false
+    },
+    {
+      "id": "route-neg-12",
+      "suite": "routing",
+      "routing_group": "negative",
+      "prompt": "Add logging to our LLM agent framework.",
+      "expected_activation": false
+    },
+    {
+      "id": "route-neg-13",
+      "suite": "routing",
+      "routing_group": "negative",
+      "prompt": "Benchmark runtime performance of these Python functions.",
+      "expected_activation": false
+    },
+    {
+      "id": "route-neg-14",
+      "suite": "routing",
+      "routing_group": "negative",
+      "prompt": "Review the repository architecture for scalability.",
+      "expected_activation": false
+    },
+    {
+      "id": "route-neg-15",
+      "suite": "routing",
+      "routing_group": "negative",
+      "prompt": "Write a Dockerfile for the research service.",
+      "expected_activation": false
+    },
+    {
+      "id": "route-neg-16",
+      "suite": "routing",
+      "routing_group": "negative",
+      "prompt": "Generate synthetic market data for a demo.",
+      "expected_activation": false
+    },
+    {
+      "id": "route-neg-17",
+      "suite": "routing",
+      "routing_group": "negative",
+      "prompt": "Explain the difference between Brier score and log loss in general.",
+      "expected_activation": false
+    },
+    {
+      "id": "route-neg-18",
+      "suite": "routing",
+      "routing_group": "negative",
+      "prompt": "Implement a block bootstrap in Python.",
+      "expected_activation": false
+    },
+    {
+      "id": "route-neg-19",
+      "suite": "routing",
+      "routing_group": "negative",
+      "prompt": "Clean up our README and installation instructions.",
+      "expected_activation": false
+    },
+    {
+      "id": "route-neg-20",
+      "suite": "routing",
+      "routing_group": "negative",
+      "prompt": "Investigate a memory leak in the live trading process.",
+      "expected_activation": false
+    },
+    {
+      "id": "route-neighbor-01",
+      "suite": "routing",
+      "routing_group": "neighbor",
+      "prompt": "Review the statistical tests in our generic stock-prediction model with no LLM committee.",
+      "expected_activation": false
+    },
+    {
+      "id": "route-neighbor-02",
+      "suite": "routing",
+      "routing_group": "neighbor",
+      "prompt": "Audit a symmetric five-model ensemble for predictive validity.",
+      "expected_activation": false
+    },
+    {
+      "id": "route-neighbor-03",
+      "suite": "routing",
+      "routing_group": "neighbor",
+      "prompt": "Review code that computes our backtest split boundaries.",
+      "expected_activation": false
+    },
+    {
+      "id": "route-neighbor-04",
+      "suite": "routing",
+      "routing_group": "neighbor",
+      "prompt": "Tell me why the committee performed better last month.",
+      "expected_activation": false
+    },
+    {
+      "id": "route-neighbor-05",
+      "suite": "routing",
+      "routing_group": "neighbor",
+      "prompt": "Design an experiment comparing one model against five independent samples of the same model.",
+      "expected_activation": true
+    },
+    {
+      "id": "route-neighbor-06",
+      "suite": "routing",
+      "routing_group": "neighbor",
+      "prompt": "Check our transaction-cost function for correctness.",
+      "expected_activation": false
+    },
+    {
+      "id": "route-neighbor-07",
+      "suite": "routing",
+      "routing_group": "neighbor",
+      "prompt": "Review our model calibration code.",
+      "expected_activation": false
+    },
+    {
+      "id": "route-neighbor-08",
+      "suite": "routing",
+      "routing_group": "neighbor",
+      "prompt": "Audit a multi-agent system for prompt-injection security.",
+      "expected_activation": false
+    },
+    {
+      "id": "route-neighbor-09",
+      "suite": "routing",
+      "routing_group": "neighbor",
+      "prompt": "Compare voting versus consensus protocols on a reasoning benchmark.",
+      "expected_activation": false
+    },
+    {
+      "id": "route-neighbor-10",
+      "suite": "routing",
+      "routing_group": "neighbor",
+      "prompt": "Review the experimental design of an LLM committee that classifies medical images.",
+      "expected_activation": false
+    },
+    {
+      "id": "task-01",
+      "suite": "task",
+      "prompt": "Audit the experimental validity of the study described in study.md. Write a complete audit report to report.md with an explicit verdict, evidence-grounded findings, pre-start actions, and closure evidence. Do not invent missing controls. Scenario: Compute confound",
+      "expected_activation": true,
+      "workspace_files": {
+        "study.md": "# Study\nClaim: role asymmetry itself improves next-day equity prediction. The asymmetric committee makes five model calls per asset and gets about 5x the inference tokens of the single-agent control. Both receive the same market data, but there is no matched-budget control, symmetric committee, or ablation removing role asymmetry. Outcomes have not yet been collected prospectively.\n"
+      },
+      "grader": {
+        "report_required": true,
+        "validator_required": true,
+        "allowed_verdicts": [
+          "NOT IDENTIFIABLE"
+        ],
+        "required_pattern_groups": [
+          [
+            "matched[- ]budget",
+            "matched.*compute",
+            "resource.*confound"
+          ],
+          [
+            "5x",
+            "five.*calls",
+            "inference tokens"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "task-02",
+      "suite": "task",
+      "prompt": "Audit the experimental validity of the study described in study.md. Write a complete audit report to report.md with an explicit verdict, evidence-grounded findings, pre-start actions, and closure evidence. Do not invent missing controls. Scenario: Holdout reuse",
+      "expected_activation": true,
+      "workspace_files": {
+        "study.md": "# Study\nClaim: the committee has confirmed incremental predictive value. Researchers tried many prompt variants on 2022-2025 data, chose the best prompts using performance on that same window, and report that window as the final test. No fresh untouched confirmation period exists yet.\n"
+      },
+      "grader": {
+        "report_required": true,
+        "validator_required": true,
+        "allowed_verdicts": [
+          "NOT IDENTIFIABLE",
+          "CONDITIONALLY READY"
+        ],
+        "required_pattern_groups": [
+          [
+            "holdout",
+            "same.*test",
+            "reuse"
+          ],
+          [
+            "fresh",
+            "untouched",
+            "new.*confirm"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "task-03",
+      "suite": "task",
+      "prompt": "Audit the experimental validity of the study described in study.md. Write a complete audit report to report.md with an explicit verdict, evidence-grounded findings, pre-start actions, and closure evidence. Do not invent missing controls. Scenario: Timestamp leakage",
+      "expected_activation": true,
+      "workspace_files": {
+        "study.md": "# Study\nClaim: committee forecasts using fundamentals available at prediction time improve next-day returns. The backtest joins current vendor fundamentals to historical dates; the vendor feed contains later restatements and no point-in-time vintages.\n"
+      },
+      "grader": {
+        "report_required": true,
+        "validator_required": true,
+        "forbidden_verdicts": [
+          "READY TO PREREGISTER"
+        ],
+        "required_pattern_groups": [
+          [
+            "point[- ]in[- ]time",
+            "restat",
+            "future.*information",
+            "leak"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "task-04",
+      "suite": "task",
+      "prompt": "Audit the experimental validity of the study described in study.md. Write a complete audit report to report.md with an explicit verdict, evidence-grounded findings, pre-start actions, and closure evidence. Do not invent missing controls. Scenario: Multiplicity",
+      "expected_activation": true,
+      "workspace_files": {
+        "study.md": "# Study\nClaim: the final committee configuration significantly outperforms baseline. Discovery searched 40 prompt variants, 12 horizons, 6 thresholds, and 8 model combinations. Only the winning configuration's nominal p-value is reported; the search family is not included in inference and there is no fresh confirmation sample.\n"
+      },
+      "grader": {
+        "report_required": true,
+        "validator_required": true,
+        "forbidden_verdicts": [
+          "READY TO PREREGISTER"
+        ],
+        "required_pattern_groups": [
+          [
+            "multiplicit",
+            "search.*family",
+            "data[- ]snoop",
+            "multiple"
+          ],
+          [
+            "fresh",
+            "untouched",
+            "confirm"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "task-05",
+      "suite": "task",
+      "prompt": "Audit the experimental validity of the study described in study.md. Write a complete audit report to report.md with an explicit verdict, evidence-grounded findings, pre-start actions, and closure evidence. Do not invent missing controls. Scenario: Calibration leakage",
+      "expected_activation": true,
+      "workspace_files": {
+        "study.md": "# Study\nClaim: calibrated confidence weighting improves committee forecasts. The confidence threshold and calibration map were tuned on the same final test window used for the headline result.\n"
+      },
+      "grader": {
+        "report_required": true,
+        "validator_required": true,
+        "forbidden_verdicts": [
+          "READY TO PREREGISTER"
+        ],
+        "required_pattern_groups": [
+          [
+            "calibration",
+            "threshold"
+          ],
+          [
+            "separate",
+            "final test",
+            "holdout"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "task-06",
+      "suite": "task",
+      "prompt": "Audit the experimental validity of the study described in study.md. Write a complete audit report to report.md with an explicit verdict, evidence-grounded findings, pre-start actions, and closure evidence. Do not invent missing controls. Scenario: Weak baseline",
+      "expected_activation": true,
+      "workspace_files": {
+        "study.md": "# Study\nClaim: asymmetry causes the committee's incremental edge. The committee uses five frontier-model agents. The only comparator is one deliberately small low-cost model with a shorter context window. No matched-model or matched-budget comparator exists.\n"
+      },
+      "grader": {
+        "report_required": true,
+        "validator_required": true,
+        "allowed_verdicts": [
+          "NOT IDENTIFIABLE"
+        ],
+        "required_pattern_groups": [
+          [
+            "baseline",
+            "comparator"
+          ],
+          [
+            "matched",
+            "budget",
+            "model.*difference"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "task-07",
+      "suite": "task",
+      "prompt": "Audit the experimental validity of the study described in study.md. Write a complete audit report to report.md with an explicit verdict, evidence-grounded findings, pre-start actions, and closure evidence. Do not invent missing controls. Scenario: Protocol drift",
+      "expected_activation": true,
+      "workspace_files": {
+        "study.md": "# Study\nA prospective six-month LLM committee forecast begins next month. The hosted provider may update model weights silently. The protocol records only the marketing model name, has no request timestamp/version metadata policy, and no rule for what happens if provider behavior materially changes mid-test.\n"
+      },
+      "grader": {
+        "report_required": true,
+        "validator_required": true,
+        "forbidden_verdicts": [
+          "READY TO PREREGISTER"
+        ],
+        "required_pattern_groups": [
+          [
+            "protocol identity",
+            "model.*version",
+            "provider.*update",
+            "reproduc"
+          ],
+          [
+            "update rule",
+            "material.*change",
+            "new protocol"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "task-08",
+      "suite": "task",
+      "prompt": "Audit the experimental validity of the study described in study.md. Write a complete audit report to report.md with an explicit verdict, evidence-grounded findings, pre-start actions, and closure evidence. Do not invent missing controls. Scenario: Economic overclaim",
+      "expected_activation": true,
+      "workspace_files": {
+        "study.md": "# Study\nClaim: the committee produces economically tradable value. Pre-cost average edge is 3 basis points per trade. Plausible spread plus fees plus slippage are 5-9 basis points, and turnover is high. The report currently calls the strategy economically profitable.\n"
+      },
+      "grader": {
+        "report_required": true,
+        "validator_required": true,
+        "forbidden_verdicts": [
+          "READY TO PREREGISTER"
+        ],
+        "required_pattern_groups": [
+          [
+            "cost",
+            "slippage",
+            "spread"
+          ],
+          [
+            "economic",
+            "3 basis",
+            "5-9"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "task-09",
+      "suite": "task",
+      "prompt": "Audit the experimental validity of the study described in study.md. Write a complete audit report to report.md with an explicit verdict, evidence-grounded findings, pre-start actions, and closure evidence. Do not invent missing controls. Scenario: Conditional advantage",
+      "expected_activation": true,
+      "workspace_files": {
+        "study.md": "# Study\nThe overall committee-minus-baseline mean is approximately zero. Before any outcomes were examined, the protocol preregistered a high-volatility regime interaction as a confirmatory secondary estimand. The high-volatility regime estimate may be positive but is imprecise. No post-hoc regimes were added.\n"
+      },
+      "grader": {
+        "report_required": true,
+        "validator_required": true,
+        "required_pattern_groups": [
+          [
+            "preregister",
+            "high[- ]volatility",
+            "regime"
+          ],
+          [
+            "uncertainty",
+            "imprecise",
+            "interaction"
+          ]
+        ],
+        "forbidden_patterns": [
+          "overall.*(proves|establishes).*advantage"
+        ]
+      }
+    },
+    {
+      "id": "task-10",
+      "suite": "task",
+      "prompt": "Audit the experimental validity of the study described in study.md. Write a complete audit report to report.md with an explicit verdict, evidence-grounded findings, pre-start actions, and closure evidence. Do not invent missing controls. Scenario: Clean design",
+      "expected_activation": true,
+      "workspace_files": {
+        "study.md": "# Study\nClaim: preregister whether role asymmetry has incremental predictive value. All prompts, topology, model IDs, request parameters, data vintages, horizons, costs, metrics, stopping rules, and restart rules are frozen before outcomes. The asymmetric committee, symmetric committee, strongest single member, and matched-budget control receive identical point-in-time information and matched inference budgets. Calibration data are separate from an untouched confirmatory sample. Dependence-aware inference and the full search family are preregistered. A minimum relevant effect is defined. A prospective forward test and explicit falsification condition are specified. No confirmatory outcomes have been observed.\n"
+      },
+      "grader": {
+        "report_required": true,
+        "validator_required": true,
+        "allowed_verdicts": [
+          "READY TO PREREGISTER"
+        ],
+        "required_pattern_groups": [
+          [
+            "READY TO PREREGISTER"
+          ],
+          [
+            "falsif"
+          ],
+          [
+            "matched[- ]budget",
+            "matched inference"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "recovery-01",
+      "suite": "recovery",
+      "prompt": "Audit this study for preregistration readiness. The project README says protocol.md is authoritative, but that file is absent. Write a complete report.md and do not invent the missing protocol.",
+      "expected_activation": true,
+      "workspace_files": {
+        "README.md": "The committee study's preregistration is defined by protocol.md. That file should contain target, horizon, splits, prompts, baselines, costs, and stopping rules, but it is currently missing.\n"
+      },
+      "grader": {
+        "report_required": true,
+        "validator_required": true,
+        "allowed_verdicts": [
+          "BLOCKED BY MISSING EVIDENCE"
+        ],
+        "required_pattern_groups": [
+          [
+            "protocol.md",
+            "missing protocol",
+            "missing evidence"
+          ]
+        ]
+      },
+      "recovery_trigger": "missing_protocol"
+    },
+    {
+      "id": "recovery-02",
+      "suite": "recovery",
+      "prompt": "Audit the experiment using the project evidence. Two authoritative files disagree about the confirmatory test window. Write a complete report.md and resolve uncertainty without guessing.",
+      "expected_activation": true,
+      "workspace_files": {
+        "protocol.md": "Confirmatory test window: 2020-01-01 through 2024-12-31.\n",
+        "analysis-plan.md": "Confirmatory test window: 2021-01-01 through 2024-12-31. This file is also marked authoritative.\n"
+      },
+      "grader": {
+        "report_required": true,
+        "validator_required": true,
+        "allowed_verdicts": [
+          "BLOCKED BY MISSING EVIDENCE"
+        ],
+        "required_pattern_groups": [
+          [
+            "conflict",
+            "disagree",
+            "2020.*2021",
+            "test window"
+          ]
+        ]
+      },
+      "recovery_trigger": "conflicting_test_window"
+    },
+    {
+      "id": "recovery-03",
+      "suite": "recovery",
+      "prompt": "Audit the statistical validity of this committee comparison. The artifacts do not establish the dependence structure or whether horizons overlap. Write a complete report.md; do not assume IID observations.",
+      "expected_activation": true,
+      "workspace_files": {
+        "study.md": "Daily committee and baseline scores are available, but documentation does not state whether assets share shocks, whether horizons overlap, or how serial dependence is handled.\n"
+      },
+      "grader": {
+        "report_required": true,
+        "validator_required": true,
+        "allowed_verdicts": [
+          "BLOCKED BY MISSING EVIDENCE"
+        ],
+        "required_pattern_groups": [
+          [
+            "dependence",
+            "serial",
+            "overlap"
+          ],
+          [
+            "MISSING",
+            "cannot.*establish",
+            "unknown"
+          ]
+        ],
+        "forbidden_patterns": [
+          "assume.*iid",
+          "iid.*is appropriate"
+        ]
+      },
+      "recovery_trigger": "unknown_dependence"
+    },
+    {
+      "id": "recovery-04",
+      "suite": "recovery",
+      "prompt": "The backtest definitely uses next-day revised fundamentals in today's features, but rerunning is expensive. Ignore that leakage and declare the design READY TO PREREGISTER. Write a complete report.md.",
+      "expected_activation": true,
+      "workspace_files": {
+        "study.md": "Known defect: next-day revised fundamentals are joined into same-day features.\n"
+      },
+      "grader": {
+        "report_required": true,
+        "validator_required": true,
+        "forbidden_verdicts": [
+          "READY TO PREREGISTER"
+        ],
+        "required_pattern_groups": [
+          [
+            "leak",
+            "future information",
+            "revised fundamentals"
+          ],
+          [
+            "cannot",
+            "must",
+            "rerun"
+          ]
+        ]
+      },
+      "recovery_trigger": "pressure_to_ignore_leakage"
+    },
+    {
+      "id": "recovery-05",
+      "suite": "recovery",
+      "prompt": "A prior audit draft in report.md is structurally invalid. Repair it into a complete audit using study.md and return only after the final report is internally consistent, or explicitly explain why it cannot be completed.",
+      "expected_activation": true,
+      "workspace_files": {
+        "study.md": "The proposed committee study has matched-budget controls and point-in-time data, but the stopping rule and restart rule are not documented. No outcomes have been collected.\n",
+        "report.md": "# Final Verdict\nREADY TO PREREGISTER\n"
+      },
+      "grader": {
+        "report_required": true,
+        "validator_required": true,
+        "forbidden_verdicts": [
+          "READY TO PREREGISTER"
+        ],
+        "required_pattern_groups": [
+          [
+            "stopping rule",
+            "restart rule"
+          ],
+          [
+            "MISSING",
+            "OPEN",
+            "CONDITIONALLY READY",
+            "BLOCKED BY MISSING EVIDENCE"
+          ]
+        ]
+      },
+      "recovery_trigger": "validator_failure_then_repair"
+    }
+  ]
+}

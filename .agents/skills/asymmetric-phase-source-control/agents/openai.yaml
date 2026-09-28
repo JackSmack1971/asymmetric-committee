@@ -1,0 +1,7 @@
+interface:
+  display_name: "Asymmetric Phase Source Control"
+  short_description: "Manage phase branches, small commits, gates, and PR integration"
+  default_prompt: "Use $asymmetric-phase-source-control for this phase branch, commit, staging, PR, or integration task."
+
+policy:
+  allow_implicit_invocation: true
