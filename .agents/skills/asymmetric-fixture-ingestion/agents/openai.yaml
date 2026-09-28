@@ -1,7 +1,0 @@
-interface:
-  display_name: "Asymmetric Fixture Ingestion"
-  short_description: "Build provider ingestion with shared throttling and deterministic replay"
-  default_prompt: "Use $asymmetric-fixture-ingestion for this external-provider ingestion change."
-
-policy:
-  allow_implicit_invocation: true

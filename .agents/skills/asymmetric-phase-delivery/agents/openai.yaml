@@ -1,7 +1,0 @@
-interface:
-  display_name: "Asymmetric Phase Delivery"
-  short_description: "Plan, reconcile, implement, gate, and record a project phase"
-  default_prompt: "Use $asymmetric-phase-delivery to deliver or continue the current numbered phase."
-
-policy:
-  allow_implicit_invocation: true

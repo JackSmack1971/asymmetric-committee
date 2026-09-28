@@ -1,4 +1,0 @@
-interface:
-  display_name: "Asymmetric Predictive Validity Audit"
-  short_description: "Audit LLM committee predictive-validity claims"
-  default_prompt: "Use $asymmetric-predictive-validity-audit to determine whether this LLM committee experiment is identifiable, falsifiable, leakage-resistant, and ready to preregister."

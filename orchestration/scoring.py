@@ -73,6 +73,8 @@ def _bar_range_end(
                 ends.append(calendar.horizon_session(reference.session_date, int(horizon)))
             except CalendarCoverageError:
                 continue
+    # No horizon fits the calendar yet: read bars through the latest entry session only. Horizons
+    # past calendar coverage stay unresolved (no outcome row) rather than being guessed.
     return max(ends, default=max(starts, default=None))
 
 

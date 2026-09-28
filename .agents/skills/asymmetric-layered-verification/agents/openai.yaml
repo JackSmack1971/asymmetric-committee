@@ -1,7 +1,0 @@
-interface:
-  display_name: "Asymmetric Layered Verification"
-  short_description: "Use fast checks, service-backed gates, and exact evidence"
-  default_prompt: "Use $asymmetric-layered-verification for this test, gate, smoke, service, or acceptance change."
-
-policy:
-  allow_implicit_invocation: true

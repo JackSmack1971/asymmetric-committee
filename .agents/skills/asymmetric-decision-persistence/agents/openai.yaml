@@ -1,7 +1,0 @@
-interface:
-  display_name: "Asymmetric Decision Persistence"
-  short_description: "Make decisions atomic, idempotent, replayable, and resumable"
-  default_prompt: "Use $asymmetric-decision-persistence for this committee, risk, transaction, replay, or decision-record change."
-
-policy:
-  allow_implicit_invocation: true

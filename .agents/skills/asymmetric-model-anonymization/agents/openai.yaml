@@ -1,7 +1,0 @@
-interface:
-  display_name: "Asymmetric Model Anonymization"
-  short_description: "Prevent identity and numeric leakage in model-facing inputs"
-  default_prompt: "Use $asymmetric-model-anonymization for this prompt, alias, partition, or leak-safety change."
-
-policy:
-  allow_implicit_invocation: true

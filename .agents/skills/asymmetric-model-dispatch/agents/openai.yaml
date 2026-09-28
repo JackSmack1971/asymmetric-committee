@@ -1,7 +1,0 @@
-interface:
-  display_name: "Asymmetric Model Dispatch"
-  short_description: "Bound model cost, retries, caching, rate limits, and resumable outcomes"
-  default_prompt: "Use $asymmetric-model-dispatch for this LLM provider, budget, cache, retry, or runner change."
-
-policy:
-  allow_implicit_invocation: true
