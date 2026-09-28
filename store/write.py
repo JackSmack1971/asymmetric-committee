@@ -28,6 +28,11 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import insert
 
+from contracts.benchmarks import (
+    BenchmarkResult,
+    assert_benchmark_completeness,
+    assert_benchmark_variant_completeness,
+)
 from contracts.commitment import CommitmentIntegrityError, CommitmentMaterial
 from contracts.corporate_actions import (
     WITHDRAWN,
@@ -46,6 +51,7 @@ from contracts.data import (
     InsiderTxn,
     NewsItem,
     PriceBar,
+    SicObservation,
     UniverseMember,
 )
 from contracts.enums import (
@@ -54,6 +60,7 @@ from contracts.enums import (
     AgentName,
     FeedName,
     KnowledgeBasis,
+    OutcomeCompleteness,
     RunMode,
     RunStatus,
     SecurityKind,
@@ -67,6 +74,7 @@ from contracts.errors import (
     RunHaltedError,
 )
 from contracts.market_data import (
+    BenchmarkPeriodReference,
     CalendarCoverage,
     ExecutionReference,
     HaltReference,
@@ -79,6 +87,7 @@ from contracts.market_data import (
 )
 from contracts.models import (
     AgentVerdict,
+    BenchmarkReplayContext,
     CommitmentAnchor,
     CommitteeDecisionRecord,
     DecisionCommitment,
@@ -86,6 +95,7 @@ from contracts.models import (
     ExecutionRecord,
     GateDecision,
     KillSwitchEvent,
+    OutcomeRecord,
     PortfolioSnapshot,
     ProposedBook,
     RedTeamVerdict,
@@ -125,6 +135,13 @@ def _insert(conn: Connection, table: Table, models: Sequence[BaseModel]) -> int:
 
 def insert_price_bars(conn: Connection, rows: Sequence[PriceBar]) -> int:
     return _insert(conn, t.price_bars, rows)
+
+
+def insert_sic_observations(conn: Connection, rows: Sequence[SicObservation]) -> int:
+    """Append first-observed SIC snapshots; a changed observation is a new version/time."""
+    return _insert_immutable(
+        conn, t.sic_history, rows, ("security_id", "event_time", "source_version")
+    )
 
 
 def insert_fundamentals(conn: Connection, rows: Sequence[FundamentalFact]) -> int:
@@ -1029,6 +1046,133 @@ def insert_execution_references(conn: Connection, rows: Sequence[ExecutionRefere
     return _insert_immutable(conn, t.execution_references, rows, ("run_id", "symbol_ref"))
 
 
+def insert_benchmark_period_references(
+    conn: Connection, rows: Sequence[BenchmarkPeriodReference]
+) -> int:
+    """Insert same-run weekly endpoint evidence; exact replay is a no-op, conflicts fail."""
+    return _insert_immutable(conn, t.benchmark_period_references, rows, ("run_id", "symbol_ref"))
+
+
+def load_benchmark_period_references(
+    conn: Connection, run_id: UUID
+) -> list[BenchmarkPeriodReference]:
+    c = t.benchmark_period_references.c
+    rows = conn.execute(
+        select(t.benchmark_period_references).where(c.run_id == run_id).order_by(c.symbol_ref)
+    ).mappings()
+    return [
+        BenchmarkPeriodReference.model_validate(
+            {key: value for key, value in dict(row).items() if key != "ingested_at"}
+        )
+        for row in rows
+    ]
+
+
+def insert_benchmark_results(
+    conn: Connection, rows: Sequence[BenchmarkResult], *, expected_weeks: Sequence[date]
+) -> int:
+    """Persist one complete enum-driven batch; identical replay is idempotent and conflicts fail."""
+    if not rows:
+        raise ValueError("benchmark result batch cannot be empty")
+    run_ids = {row.run_id for row in rows}
+    commitments = {row.commitment_sha256 for row in rows}
+    cutoffs = {row.outcome_cutoff for row in rows}
+    completeness = {row.completeness for row in rows}
+    if len(run_ids) != 1 or len(commitments) != 1 or len(cutoffs) != 1 or len(completeness) != 1:
+        raise ValueError("benchmark batch must have one run and commitment identity")
+    run_id = next(iter(run_ids))
+    commitment_sha256 = next(iter(commitments))
+    cutoff = next(iter(cutoffs))
+    result_completeness = next(iter(completeness))
+    result_keys = ((row.week_start, row.benchmark, row.variant) for row in rows)
+    if result_completeness is OutcomeCompleteness.HALTED:
+        assert_benchmark_variant_completeness(result_keys, expected_weeks)
+    else:
+        assert_benchmark_completeness(result_keys, expected_weeks)
+    run_row = conn.execute(select(t.runs).where(t.runs.c.run_id == run_id)).mappings().one_or_none()
+    commitment_row = (
+        conn.execute(
+            select(t.decision_commitments).where(t.decision_commitments.c.run_id == run_id)
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if run_row is None or commitment_row is None:
+        raise ValueError("benchmark results require a stored run and decision commitment")
+    if commitment_row["sha256"] != commitment_sha256 or commitment_row["committed_at"] > cutoff:
+        raise ValueError("benchmark results do not match a cutoff-eligible commitment")
+    anchor_row = (
+        conn.execute(select(t.commitment_anchors).where(t.commitment_anchors.c.run_id == run_id))
+        .mappings()
+        .one_or_none()
+    )
+    mode = RunMode(run_row["mode"])
+    status = RunStatus(run_row["status"])
+    if anchor_row is None or anchor_row["sha256"] != commitment_sha256:
+        raise ValueError("benchmark results require the matching durable commitment anchor")
+    if anchor_row["anchored_at"] > cutoff:
+        raise ValueError("benchmark outcome cutoff precedes its durable anchor")
+    if result_completeness is OutcomeCompleteness.COMPLETE:
+        allowed_statuses = (
+            (RunStatus.EXECUTED, RunStatus.SCORED)
+            if mode is RunMode.LIVE
+            else (RunStatus.ANCHORED, RunStatus.SCORED)
+        )
+        if status not in allowed_statuses:
+            raise ValueError("COMPLETE benchmark results require an admitted complete run")
+        scope: set[int] = set(
+            conn.execute(
+                select(t.committee_decisions.c.security_id)
+                .where(t.committee_decisions.c.run_id == run_id)
+                .distinct()
+            ).scalars()
+        )
+        latest = (
+            select(
+                t.outcomes.c.security_id,
+                t.outcomes.c.horizon,
+                func.max(t.outcomes.c.revision_id).label("revision_id"),
+            )
+            .where(t.outcomes.c.run_id == run_id, t.outcomes.c.resolved_at <= cutoff)
+            .group_by(t.outcomes.c.security_id, t.outcomes.c.horizon)
+            .subquery()
+        )
+        resolved: set[int] = set(
+            conn.execute(
+                select(t.outcomes.c.security_id)
+                .select_from(
+                    latest.join(t.outcomes, t.outcomes.c.revision_id == latest.c.revision_id)
+                )
+                .where(
+                    t.outcomes.c.run_id == run_id,
+                    t.outcomes.c.completeness == OutcomeCompleteness.COMPLETE.value,
+                )
+                .group_by(t.outcomes.c.security_id)
+                .having(func.count(func.distinct(t.outcomes.c.horizon)) == 3)
+            ).scalars()
+        )
+        if not scope or not scope <= resolved:
+            raise ValueError("COMPLETE benchmark results require complete P6.5 outcomes for scope")
+    else:
+        if (
+            status is not RunStatus.PARTIAL
+            or not str(run_row["status_reason"] or "").startswith(HALT_REASON_PREFIX)
+            or conn.execute(
+                select(t.kill_switch_events.c.event_id)
+                .where(t.kill_switch_events.c.run_id == run_id)
+                .limit(1)
+            ).scalar_one_or_none()
+            is None
+        ):
+            raise ValueError("HALTED benchmark results require durable P6.5 halt evidence")
+    return _insert_immutable(
+        conn,
+        t.benchmark_results,
+        rows,
+        ("run_id", "week_start", "benchmark", "variant"),
+    )
+
+
 def insert_halt_reference_requests(conn: Connection, rows: Sequence[HaltReferenceRequest]) -> int:
     return _insert_immutable(conn, t.halt_reference_requests, rows, ("run_id", "trigger"))
 
@@ -1039,6 +1183,67 @@ def insert_halt_symbol_set(conn: Connection, row: HaltSymbolSet) -> int:
 
 def insert_halt_references(conn: Connection, rows: Sequence[HaltReference]) -> int:
     return _insert_immutable(conn, t.halt_references, rows, ("run_id", "trigger", "symbol_ref"))
+
+
+def persist_outcomes(
+    conn: Connection,
+    rows: Sequence[OutcomeRecord],
+    *,
+    completeness: OutcomeCompleteness,
+    requested_at: datetime,
+) -> int:
+    """Append admitted outcome revisions and atomically promote only a complete run.
+
+    ``conn`` must be the caller's transaction. A complete batch must contain all three horizons
+    for each included security; the database trigger independently checks commitment, anchor,
+    run status, and the stored outcome set before allowing the status update.
+    """
+    if not rows:
+        raise ValueError("an outcome batch is nonempty")
+    run_ids = {row.run_id for row in rows}
+    if len(run_ids) != 1:
+        raise ValueError("an outcome batch contains one run")
+    run_id = next(iter(run_ids))
+    if any(row.scored_at < requested_at for row in rows):
+        raise ValueError("outcome scoring timestamp precedes its admission")
+    if any(row.resolved_at is None or row.resolved_at > requested_at for row in rows):
+        raise ValueError("outcome dependencies were not all known at the scoring cutoff")
+    grouped: dict[int, set[int]] = {}
+    for row in rows:
+        grouped.setdefault(row.security_id, set()).add(int(row.horizon))
+    if completeness is OutcomeCompleteness.COMPLETE and any(
+        horizons != {5, 21, 63} for horizons in grouped.values()
+    ):
+        raise ValueError("complete outcomes require horizons 5, 21, and 63 for every security")
+    payloads: list[dict[str, Any]] = []
+    for row in rows:
+        material = row.model_dump(mode="json", exclude={"revision_id", "evidence_revision_sha256"})
+        material["completeness"] = completeness.value
+        digest = hashlib.sha256(
+            json.dumps(material, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        payload = row.model_dump(mode="python", exclude={"revision_id", "evidence_revision_sha256"})
+        payload["completeness"] = completeness.value
+        payload["evidence_revision_sha256"] = digest
+        payloads.append(payload)
+    stmt = (
+        insert(t.outcomes)
+        .values(payloads)
+        .on_conflict_do_nothing(constraint="uq_outcomes_revision")
+        .returning(t.outcomes.c.revision_id)
+    )
+    inserted = len(conn.execute(stmt).all())
+    if completeness is OutcomeCompleteness.COMPLETE:
+        result = conn.execute(
+            update(t.runs)
+            .where(
+                t.runs.c.run_id == run_id, t.runs.c.status.in_(("ANCHORED", "EXECUTED", "SCORED"))
+            )
+            .values(status=RunStatus.SCORED.value)
+        )
+        if result.rowcount != 1:
+            raise ValueError("only a complete ANCHORED/EXECUTED/SCORED run can be scored")
+    return inserted
 
 
 # --- corporate actions + delistings (P6.4): immutable, conflict-checked writers -----------------
@@ -1253,3 +1458,53 @@ def record_delisting(conn: Connection, row: Delisting) -> int:
     if latest is not None and latest.available_at >= row.available_at:
         raise ValueError("a delisting derivation cannot precede the latest stored one")
     return _insert_immutable(conn, t.delistings, [row], ("security_id", "available_at"))
+
+
+def insert_benchmark_replay_context(conn: Connection, context: BenchmarkReplayContext) -> int:
+    """Persist immutable sizing/version evidence outside the P6.5 commitment payload."""
+    stmt = (
+        insert(t.benchmark_replay_contexts)
+        .values(
+            run_id=context.run_id,
+            replay_context=context.model_dump(mode="json"),
+            evidence_sha256=context.evidence_sha256,
+        )
+        .on_conflict_do_nothing()
+        .returning(literal(1))
+    )
+    inserted = int(conn.execute(stmt).scalar_one_or_none() or 0)
+    stored = (
+        conn.execute(
+            select(t.benchmark_replay_contexts).where(
+                t.benchmark_replay_contexts.c.run_id == context.run_id
+            )
+        )
+        .mappings()
+        .one()
+    )
+    persisted = BenchmarkReplayContext.model_validate(stored["replay_context"])
+    if persisted != context or stored["evidence_sha256"] != context.evidence_sha256:
+        raise ImmutableConflictError(
+            f"conflicting benchmark replay context for run {context.run_id}"
+        )
+    if persisted.evidence_sha256 != stored["evidence_sha256"]:
+        raise ValueError("stored benchmark replay context digest is invalid")
+    return inserted
+
+
+def load_benchmark_replay_context(conn: Connection, run_id: UUID) -> BenchmarkReplayContext | None:
+    row = (
+        conn.execute(
+            select(t.benchmark_replay_contexts).where(
+                t.benchmark_replay_contexts.c.run_id == run_id
+            )
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if row is None:
+        return None
+    context = BenchmarkReplayContext.model_validate(row["replay_context"])
+    if context.evidence_sha256 != row["evidence_sha256"]:
+        raise ValueError("stored benchmark replay context digest is invalid")
+    return context

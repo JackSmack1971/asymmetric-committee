@@ -172,6 +172,7 @@ def test_every_supported_type_is_persisted_uninterpreted_ones_flagged(engine: En
         CorporateActionType.RIGHTS_DISTRIBUTION,
         CorporateActionType.PARTIAL_CALL,
         CorporateActionType.REORGANIZATION,
+        CorporateActionType.CAPITAL_GAINS_DISTRIBUTION,
     }
 
 

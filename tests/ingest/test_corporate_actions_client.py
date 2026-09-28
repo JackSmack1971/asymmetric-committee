@@ -59,6 +59,7 @@ def test_supported_types_match_the_api_reference_exactly() -> None:
         "rights_distribution",
         "partial_call",
         "reorganization",
+        "capital_gains_distribution",
     }
     assert set(ACTION_INTERPRETATION) == set(CorporateActionType)
 
@@ -114,7 +115,7 @@ def test_unknown_group_or_malformed_page_fails() -> None:
         )
 
 
-def test_query_requests_every_type_complete_quality_and_follows_pages() -> None:
+def test_query_requests_unfiltered_complete_quality_and_follows_pages() -> None:
     calls: list[httpx.Request] = []
     c = client(
         [
@@ -132,7 +133,7 @@ def test_query_requests_every_type_complete_quality_and_follows_pages() -> None:
     assert (
         p["data_quality"] == "complete" and p["start"] == "2024-03-01" and p["end"] == "2024-03-31"
     )
-    assert set(p["types"].split(",")) == {t.value for t in CorporateActionType}
+    assert "types" not in p  # omitted types means all provider-supported types
     assert calls[1].url.params["page_token"] == "t1"
     assert calls[0].url.path == "/v1/corporate-actions"
 

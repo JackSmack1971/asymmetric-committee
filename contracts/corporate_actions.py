@@ -175,6 +175,9 @@ class CorporateActionCoverage(Contract):
     data_quality: Label = "complete"
     region: Label = "us"
     page_count: int = Field(ge=1)
+    pagination_exhausted: bool = False
+    full_history: bool = False
+    provider_lower_bound: date | None = None
     action_count: int = Field(ge=0)
     actions_sha256: Sha256Hex
     knowledge_basis: KnowledgeBasis
@@ -188,6 +191,12 @@ class CorporateActionCoverage(Contract):
             raise ValueError("coverage requires every supported action type to be requested")
         if self.data_quality != "complete":
             raise ValueError("coverage requires data_quality=complete")
+        if self.full_history and (
+            not self.pagination_exhausted or self.provider_lower_bound is None
+        ):
+            raise ValueError(
+                "full-history coverage requires exhausted pages and provider lower bound"
+            )
         if list(self.symbols) != sorted(set(self.symbols)):
             raise ValueError("coverage symbols are sorted and unique")
         return self

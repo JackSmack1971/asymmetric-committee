@@ -43,11 +43,19 @@ def _latest(sessions: Sequence[TradingSession]) -> TradingSession:
 class TradingCalendar:
     sessions: dict[date, TradingSession]
     ranges: tuple[tuple[date, date], ...]
+    coverage_available_at: tuple[tuple[date, date, datetime], ...]
 
     def status(self, day: date) -> SessionStatus:
         if not any(lo <= day <= hi for lo, hi in self.ranges):
             return SessionStatus.UNCOVERED
         return SessionStatus.OPEN if day in self.sessions else SessionStatus.CLOSED
+
+    def coverage_time(self, day: date) -> datetime:
+        """Latest confirmation time of the calendar scope that establishes ``day``."""
+        times = [available for lo, hi, available in self.coverage_available_at if lo <= day <= hi]
+        if not times:
+            raise CalendarCoverageError(f"{day} is not covered by a confirmed calendar range")
+        return max(times)
 
     def session(self, day: date) -> TradingSession:
         status = self.status(day)
@@ -145,4 +153,11 @@ def build_calendar(
             raise CalendarCoverageError(f"session {d} was revised without a newer coverage record")
         effective[d] = newest
     ranges = tuple(sorted({(c.range_start, c.range_end) for c in by_range.values()}))
-    return TradingCalendar(sessions=effective, ranges=ranges)
+    coverage_times = tuple(
+        sorted((c.range_start, c.range_end, c.available_at) for c in by_range.values())
+    )
+    return TradingCalendar(
+        sessions=effective,
+        ranges=ranges,
+        coverage_available_at=coverage_times,
+    )

@@ -292,7 +292,6 @@ class AlpacaCorporateActions:
     def query(self, symbols: Sequence[str], start: date, end: date) -> QueryResult:
         base = {
             "symbols": ",".join(symbols),
-            "types": ",".join(t.value for t in ALL_ACTION_TYPES),
             "start": start.isoformat(),
             "end": end.isoformat(),
             "limit": str(PAGE_LIMIT),
@@ -573,6 +572,7 @@ class CorporateActionsIngestor:
             symbols=tuple(sorted(s.symbols)),
             action_types=ALL_ACTION_TYPES,
             page_count=pages,
+            pagination_exhausted=True,
             action_count=len(pairs),
             actions_sha256=digest,
             knowledge_basis=basis,

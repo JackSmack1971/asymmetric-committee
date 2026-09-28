@@ -219,6 +219,14 @@ def rows(engine: Engine, run: UUID) -> dict[str, Any]:
         return {r.symbol_ref: r for r in as_of.execution_references(c, run)}
 
 
+def period_rows(engine: Engine, run: UUID, cutoff: datetime | None = None) -> dict[str, Any]:
+    with engine.connect() as c:
+        return {
+            row.symbol_ref: row
+            for row in as_of.benchmark_period_references(c, run, as_of=cutoff or RETRO)
+        }
+
+
 # --- live capture: D0 comes from the stored calendar ----------------------------------------------
 
 
@@ -248,6 +256,24 @@ def test_every_required_symbol_gets_evidence_not_only_traded_names(engine: Engin
     capture(engine).capture_live(rid, et(2024, 1, 16, 10, 1))
     # AAA is held; BBB is only in the universe; SPY and XLK are the reference instruments
     assert set(rows(engine, rid)) == {"AAA", "BBB", "SPY", "XLK"}
+
+
+def test_live_benchmark_period_reference_binds_same_run_and_next_week_session(
+    engine: Engine,
+) -> None:
+    rid = seed(engine)
+    store_calendar(engine)
+    cap = capture(engine)
+    cap.capture_live(rid, et(2024, 1, 16, 10, 1))
+    assert cap.capture_benchmark_period(rid, et(2024, 1, 19, 12, 0)).state is CaptureState.DEFERRED
+    result = cap.capture_benchmark_period(rid, et(2024, 1, 22, 10, 1))
+    assert result.state is CaptureState.WRITTEN and result.written == 4
+    got = period_rows(engine, rid)
+    assert set(got) == {"AAA", "BBB", "SPY", "XLK"}
+    assert {row.run_id for row in got.values()} == {rid}
+    assert {row.period_start for row in got.values()} == {date(2024, 1, 16)}
+    assert {row.session_date for row in got.values()} == {date(2024, 1, 22)}
+    assert {row.ref_time for row in got.values()} == {et(2024, 1, 22, 10, 0)}
 
 
 def test_a_changed_session_moves_the_reference_time_with_it(engine: Engine) -> None:
@@ -375,6 +401,23 @@ def test_backtest_builder_stores_the_latest_eligible_sip_trade(engine: Engine) -
         assert r.mode is RefMode.BACKTEST and r.source is ReferenceSource.SIP_LAST
         assert r.trade_time == et(2024, 1, 16, 9, 58) and r.trade_tape is Tape.C
         assert r.ref_time == D0_REF
+
+
+def test_backtest_period_capture_uses_endpoint_session_and_same_run(engine: Engine) -> None:
+    rid = seed(engine, mode=RunMode.BACKTEST)
+    store_calendar(engine)
+    cap = capture(engine, trades=Trades(backtest_trades()))
+    cap.build_backtest(rid, RETRO)
+    endpoint_trades = {
+        symbol: [trade(et(2024, 1, 22, 9, 58), 120.5, symbol=symbol, tape=Tape.C)]
+        for symbol in ("AAA", "BBB", "SPY", "XLK")
+    }
+    result = capture(engine, trades=Trades(endpoint_trades)).capture_benchmark_period(rid, RETRO)
+    assert result.state is CaptureState.WRITTEN and result.written == 4
+    got = period_rows(engine, rid)
+    assert {row.period_start for row in got.values()} == {date(2024, 1, 16)}
+    assert {row.session_date for row in got.values()} == {date(2024, 1, 22)}
+    assert {row.price for row in got.values()} == {120.5}
 
 
 def test_two_backtest_runs_on_the_same_date_stay_independent(engine: Engine) -> None:

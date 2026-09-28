@@ -166,6 +166,29 @@ class Horizon(IntEnum):
     D63 = 63
 
 
+class OutcomeCompleteness(StrEnum):
+    COMPLETE = "COMPLETE"
+    HALTED = "HALTED"
+
+
+class Benchmark(StrEnum):
+    """Pinned benchmark identities (§12.3)."""
+
+    SPY = "spy"
+    EXPOSURE_MATCHED_SPY = "exposure_matched_spy"
+    EQUAL_WEIGHT_UNIVERSE = "equal_weight_universe"
+    SECTOR_ETF_MATCHED = "sector_etf_matched"
+    QUANT_BASELINE_BOOK = "quant_baseline_book"
+    RANDOM_COMMITTEE = "random_committee"
+
+
+class BenchmarkVariant(StrEnum):
+    """Whether the weekly kill-switch rule is applied to the book (§9)."""
+
+    ADJUSTED = "adjusted"
+    UNADJUSTED = "unadjusted"
+
+
 class FeedName(StrEnum):
     """Data feeds (§4.1). Also names the input partition an evidence row came from."""
 
@@ -402,6 +425,7 @@ class CorporateActionType(StrEnum):
     RIGHTS_DISTRIBUTION = "rights_distribution"
     PARTIAL_CALL = "partial_call"
     REORGANIZATION = "reorganization"
+    CAPITAL_GAINS_DISTRIBUTION = "capital_gains_distribution"
 
     @property
     def response_key(self) -> str:
@@ -436,6 +460,7 @@ ACTION_INTERPRETATION: Mapping[CorporateActionType, ActionInterpretation] = {
     CorporateActionType.RIGHTS_DISTRIBUTION: ActionInterpretation.UNINTERPRETED,
     CorporateActionType.PARTIAL_CALL: ActionInterpretation.UNINTERPRETED,
     CorporateActionType.REORGANIZATION: ActionInterpretation.UNINTERPRETED,
+    CorporateActionType.CAPITAL_GAINS_DISTRIBUTION: ActionInterpretation.UNINTERPRETED,
 }
 
 

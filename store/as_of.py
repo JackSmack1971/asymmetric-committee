@@ -11,14 +11,15 @@ forbids it outside ``store/`` and ``ingest/``).
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from datetime import UTC, date, datetime, timedelta
-from typing import Any
+from datetime import UTC, date, datetime, time, timedelta
+from typing import Any, Protocol
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel
 from sqlalchemy import Column, ColumnElement, Connection, Table, and_, func, select
 from sqlalchemy.dialects.postgresql import distinct_on
 
+from contracts.benchmarks import BenchmarkResult
 from contracts.corporate_actions import (
     AssetStatusObservation,
     CorporateAction,
@@ -38,10 +39,21 @@ from contracts.data import (
     NewsItem,
     PriceBar,
     Security,
+    SicObservation,
     UniverseMember,
 )
-from contracts.enums import FeedName, KnowledgeBasis, SecurityKind
+from contracts.enums import (
+    VOTING_AGENTS,
+    AgentName,
+    FeedName,
+    Horizon,
+    KnowledgeBasis,
+    PriceFeed,
+    RunStatus,
+    SecurityKind,
+)
 from contracts.market_data import (
+    BenchmarkPeriodReference,
     CalendarCoverage,
     ExecutionReference,
     HaltReference,
@@ -52,11 +64,36 @@ from contracts.market_data import (
     TBillVintageCoverage,
     TradingSession,
 )
+from contracts.models import (
+    AgentVerdict,
+    BenchmarkReplayContext,
+    CommitmentAnchor,
+    CommitteeDecisionRecord,
+    DecisionCommitment,
+    GateDecision,
+    KillSwitchEvent,
+    OutcomeRecord,
+    PortfolioSnapshot,
+    RedTeamVerdict,
+    ResolvedForecastOutcome,
+    RunRecord,
+    VerdictRecord,
+)
 from evaluation.calendar_rules import TradingCalendar, build_calendar
 from store import _tables as t
+from store._material import decisions_from_rows, snapshot_from_row
 from store.aliases import build_alias_list
 
 Conn = Connection
+
+
+class _OutcomeTicket(Protocol):
+    @property
+    def run_id(self) -> Any: ...
+
+    @property
+    def requested_at(self) -> datetime: ...
+
 
 __all__ = [
     "Conn",
@@ -64,8 +101,11 @@ __all__ = [
     "alias_list",
     "asset_status",
     "bar_dates",
+    "benchmark_period_references",
+    "benchmark_trial_material",
     "calendar_coverage",
     "calendar_sessions",
+    "committed_security_scope",
     "corporate_actions",
     "delisting",
     "delisting_filings",
@@ -74,6 +114,7 @@ __all__ = [
     "feature_rows",
     "feed_health",
     "feed_staleness",
+    "first_kill_switch_event",
     "fundamentals",
     "halt_reference_requests",
     "halt_references",
@@ -83,10 +124,15 @@ __all__ = [
     "news",
     "pending_halt_requests",
     "prices",
+    "prices_between",
+    "prior_committed_trial_runs",
     "reference_instruments",
+    "resolved_forecast_outcomes",
+    "resolved_outcomes",
     "securities",
     "security_cik",
     "security_symbols",
+    "sic_history",
     "symbol_history",
     "tbill_rates",
     "tbill_vintage_coverage",
@@ -119,6 +165,118 @@ def _latest(
     for r in rows:
         r.pop("ingested_at", None)
     return rows
+
+
+def prices_between(
+    conn: Conn,
+    security_ids: Iterable[int],
+    start: date,
+    end: date,
+    as_of: datetime,
+) -> list[PriceBar]:
+    """Raw daily bars in the inclusive Eastern date range, knowable by ``as_of``."""
+    _check_ts(as_of)
+    if end < start:
+        raise ValueError("bar range ends before it starts")
+    ids = sorted(set(security_ids))
+    if not ids:
+        return []
+    eastern = ZoneInfo("America/New_York")
+    lower = datetime.combine(start, time.min, eastern)
+    upper = datetime.combine(end + timedelta(days=1), time.min, eastern)
+    c = t.price_bars.c
+    rows = _latest(
+        conn,
+        t.price_bars,
+        [c.security_id, c.event_time],
+        as_of,
+        c.security_id.in_(ids),
+        c.event_time >= lower,
+        c.event_time < upper,
+    )
+    bars = [PriceBar.model_validate(row) for row in rows]
+    return sorted(bars, key=lambda bar: (bar.security_id, bar.event_time))
+
+
+def sip_prices_between(
+    conn: Conn,
+    security_ids: Iterable[int],
+    start: date,
+    end: date,
+    as_of: datetime,
+) -> list[PriceBar]:
+    """Latest SIP-only daily bars per event timestamp, bounded by point-in-time availability."""
+    _check_ts(as_of)
+    if end < start:
+        raise ValueError("bar range ends before it starts")
+    ids = sorted(set(security_ids))
+    if not ids:
+        return []
+    eastern = ZoneInfo("America/New_York")
+    lower = datetime.combine(start, time.min, eastern)
+    upper = datetime.combine(end + timedelta(days=1), time.min, eastern)
+    c = t.price_bars.c
+    rows = _latest(
+        conn,
+        t.price_bars,
+        [c.security_id, c.event_time],
+        as_of,
+        c.security_id.in_(ids),
+        c.feed == PriceFeed.SIP.value,
+        c.event_time >= lower,
+        c.event_time < upper,
+    )
+    return sorted(
+        (PriceBar.model_validate(row) for row in rows),
+        key=lambda bar: (bar.security_id, bar.event_time),
+    )
+
+
+def sic_history(
+    conn: Conn,
+    security_id: int,
+    as_of: datetime,
+    *,
+    valid_at: datetime | None = None,
+) -> SicObservation | None:
+    """Latest SIC available by ``as_of`` and observed by the optional historical ``valid_at``."""
+    _check_ts(as_of)
+    observation_cutoff = valid_at or as_of
+    _check_ts(observation_cutoff)
+    c = t.sic_history.c
+    row = (
+        conn.execute(
+            select(t.sic_history)
+            .where(
+                c.security_id == security_id,
+                c.available_at <= as_of,
+                c.available_at <= observation_cutoff,
+                c.event_time <= observation_cutoff,
+            )
+            .ext(distinct_on(c.security_id))
+            .order_by(
+                c.security_id,
+                c.event_time.desc(),
+                c.available_at.desc(),
+                c.source_version.collate("C").desc(),
+            )
+        )
+        .mappings()
+        .first()
+    )
+    if row is None:
+        return None
+    return SicObservation.model_validate({k: v for k, v in dict(row).items() if k != "ingested_at"})
+
+
+def committed_security_scope(conn: Conn, ticket: _OutcomeTicket) -> tuple[int, ...]:
+    """The unique securities represented by the admitted run's durable committee decisions."""
+    _check_ts(ticket.requested_at)
+    c = t.committee_decisions.c
+    rows: Iterable[int] = conn.execute(
+        select(c.security_id).where(c.run_id == ticket.run_id).distinct().order_by(c.security_id)
+    ).scalars()
+    return tuple(int(sid) for sid in rows)
 
 
 def prices(
@@ -417,6 +575,111 @@ def execution_references(
     return sorted((ExecutionReference.model_validate(r) for r in rows), key=lambda x: x.symbol_ref)
 
 
+def benchmark_period_references(
+    conn: Conn, run_id: Any, *, as_of: datetime
+) -> list[BenchmarkPeriodReference]:
+    """The admitted run's endpoint references, limited to evidence knowable at ``as_of``."""
+    _check_ts(as_of)
+    c = t.benchmark_period_references.c
+    rows = _reference_rows(
+        conn,
+        t.benchmark_period_references,
+        c.run_id == run_id,
+        c.available_at <= as_of,
+    )
+    return sorted(
+        (BenchmarkPeriodReference.model_validate(row) for row in rows),
+        key=lambda reference: reference.symbol_ref,
+    )
+
+
+def resolved_outcomes(conn: Conn, ticket: _OutcomeTicket) -> list[OutcomeRecord]:
+    """Latest outcome revision per security/horizon, bounded by an admitted ticket cutoff."""
+    _check_ts(ticket.requested_at)
+    c = t.outcomes.c
+    ranked = select(
+        c.revision_id,
+        func.row_number()
+        .over(
+            partition_by=(c.run_id, c.security_id, c.horizon),
+            order_by=(c.resolved_at.desc(), c.revision_id.desc()),
+        )
+        .label("revision_rank"),
+    ).where(c.run_id == ticket.run_id, c.resolved_at <= ticket.requested_at)
+    eligible = ranked.subquery()
+    rows = conn.execute(
+        select(t.outcomes)
+        .join(eligible, eligible.c.revision_id == c.revision_id)
+        .where(eligible.c.revision_rank == 1)
+        .order_by(c.security_id, c.horizon)
+    ).mappings()
+    return [OutcomeRecord.model_validate(dict(r)) for r in rows]
+
+
+def resolved_forecast_outcomes(
+    conn: Conn, as_of: datetime, horizon: Horizon
+) -> list[ResolvedForecastOutcome]:
+    """Committed forecasts joined to the latest COMPLETE/HALTED label visible at ``as_of``."""
+    _check_ts(as_of)
+    c = t.outcomes.c
+    ranked = select(
+        c.revision_id,
+        func.row_number()
+        .over(
+            partition_by=(c.run_id, c.security_id, c.horizon),
+            order_by=(c.resolved_at.desc(), c.revision_id.desc()),
+        )
+        .label("revision_rank"),
+    ).where(
+        c.horizon == int(horizon),
+        c.resolved_at <= as_of,
+        c.scored_at <= as_of,
+        c.completeness.in_(("COMPLETE", "HALTED")),
+    )
+    latest = ranked.subquery()
+    verdict_table, outcome_table = t.agent_verdicts, t.outcomes
+    v, commit, outcome = verdict_table.c, t.decision_commitments.c, outcome_table.c
+    rows = conn.execute(
+        select(
+            v.run_id,
+            v.security_id,
+            v.verdict,
+            commit.committed_at,
+            outcome.resolved_at,
+            outcome.horizon,
+            outcome.fwd_return,
+            outcome.sector_fwd_return,
+        )
+        .select_from(verdict_table)
+        .join(t.decision_commitments, commit.run_id == v.run_id)
+        .join(
+            outcome_table,
+            and_(outcome.run_id == v.run_id, outcome.security_id == v.security_id),
+        )
+        .join(latest, latest.c.revision_id == outcome.revision_id)
+        .where(commit.committed_at <= as_of, v.verdict.is_not(None))
+        .order_by(v.run_id, v.security_id, v.agent)
+    ).mappings()
+    out: list[ResolvedForecastOutcome] = []
+    for row in rows:
+        verdict = AgentVerdict.model_validate(row["verdict"])
+        if verdict.agent not in VOTING_AGENTS:
+            continue
+        out.append(
+            ResolvedForecastOutcome(
+                run_id=row["run_id"],
+                security_id=row["security_id"],
+                agent=verdict.agent,
+                horizon=horizon,
+                forecast=float(getattr(verdict, f"p_outperform_{horizon.value}")),
+                outperformed=row["fwd_return"] > row["sector_fwd_return"],
+                committed_at=row["committed_at"],
+                resolved_at=row["resolved_at"],
+            )
+        )
+    return out
+
+
 def halt_reference_requests(conn: Conn, run_id: Any) -> list[HaltReferenceRequest]:
     c = t.halt_reference_requests.c
     stmt = select(t.halt_reference_requests).where(c.run_id == run_id).order_by(c.trigger)
@@ -462,6 +725,27 @@ def halt_references(conn: Conn, run_id: Any, trigger: str) -> list[HaltReference
     c = t.halt_references.c
     rows = _reference_rows(conn, t.halt_references, c.run_id == run_id, c.trigger == trigger)
     return sorted((HaltReference.model_validate(r) for r in rows), key=lambda x: x.symbol_ref)
+
+
+def first_kill_switch_event(conn: Conn, run_id: Any) -> KillSwitchEvent | None:
+    """Return the canonical first durable trigger using kill-switch ordering."""
+    c = t.kill_switch_events.c
+    row = (
+        conn.execute(
+            select(t.kill_switch_events)
+            .where(c.run_id == run_id)
+            .order_by(c.triggered_at, c.event_id)
+            .limit(1)
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if row is None:
+        return None
+    return KillSwitchEvent.model_validate(
+        {**{key: row[key] for key in KillSwitchEvent.model_fields if key in row}}
+        | {"cancelled_order_ids": tuple(row["cancelled_order_ids"])}
+    )
 
 
 # --- corporate actions + delistings (P6.4) ------------------------------------------------------
@@ -639,3 +923,179 @@ def delisting_history(conn: Conn, security_id: int, as_of: datetime) -> list[Del
     """Every prospective conclusion knowable at ``as_of``, oldest first (superseded defaults
     stay visible)."""
     return _delisting_history(conn, security_id, as_of, _PROSPECTIVE)
+
+
+def benchmark_results(
+    conn: Conn, run_id: Any, weeks: Sequence[date] | None = None
+) -> list[BenchmarkResult]:
+    """Read immutable result snapshots for exact replay without consulting current facts."""
+    c = t.benchmark_results.c
+    stmt = (
+        select(t.benchmark_results)
+        .where(c.run_id == run_id)
+        .order_by(c.week_start, c.benchmark, c.variant)
+    )
+    if weeks is not None:
+        if not weeks:
+            return []
+        stmt = stmt.where(c.week_start.in_(weeks))
+    rows = conn.execute(stmt).mappings().all()
+    return [BenchmarkResult.model_validate(dict(row)) for row in rows]
+
+
+def benchmark_replay_context(conn: Conn, run_id: Any) -> BenchmarkReplayContext | None:
+    """Read immutable benchmark replay context for an exact run identity."""
+    row = (
+        conn.execute(
+            select(t.benchmark_replay_contexts).where(
+                t.benchmark_replay_contexts.c.run_id == run_id
+            )
+        )
+        .mappings()
+        .one_or_none()
+    )
+    if row is None:
+        return None
+    context = BenchmarkReplayContext.model_validate(row["replay_context"])
+    if context.evidence_sha256 != row["evidence_sha256"]:
+        raise ValueError("stored benchmark replay context digest is invalid")
+    return context
+
+
+def benchmark_trial_material(
+    conn: Conn, run_id: Any
+) -> tuple[
+    RunRecord | None,
+    DecisionCommitment | None,
+    tuple[VerdictRecord, ...],
+    tuple[CommitteeDecisionRecord, ...],
+    PortfolioSnapshot | None,
+    CommitmentAnchor | None,
+    BenchmarkReplayContext | None,
+    tuple[GateDecision, ...],
+]:
+    """Read every immutable input used to derive the approved P6.6 trial identity."""
+    run_row = conn.execute(select(t.runs).where(t.runs.c.run_id == run_id)).mappings().one_or_none()
+    run = RunRecord.model_validate(dict(run_row)) if run_row is not None else None
+
+    commitment_row = (
+        conn.execute(
+            select(t.decision_commitments).where(t.decision_commitments.c.run_id == run_id)
+        )
+        .mappings()
+        .one_or_none()
+    )
+    commitment = (
+        DecisionCommitment.model_validate(dict(commitment_row))
+        if commitment_row is not None
+        else None
+    )
+
+    verdict_rows = conn.execute(
+        select(t.agent_verdicts)
+        .where(t.agent_verdicts.c.run_id == run_id)
+        .order_by(t.agent_verdicts.c.security_id, t.agent_verdicts.c.agent)
+    ).mappings()
+    verdicts = tuple(
+        VerdictRecord(
+            security_id=row["security_id"],
+            verdict=(
+                RedTeamVerdict.model_validate(row["verdict"])
+                if row["agent"] == AgentName.RED_TEAM.value
+                else AgentVerdict.model_validate(row["verdict"])
+            ),
+            tokens_in=row["tokens_in"],
+            tokens_out=row["tokens_out"],
+            cost_usd=row["cost_usd"],
+            latency_ms=row["latency_ms"],
+        )
+        for row in verdict_rows
+    )
+
+    decision_rows = conn.execute(
+        select(t.committee_decisions)
+        .where(t.committee_decisions.c.run_id == run_id)
+        .order_by(t.committee_decisions.c.security_id, t.committee_decisions.c.horizon)
+    ).mappings()
+    if run is None:
+        raise ValueError("committee decisions exist without their run record")
+    decisions = tuple(decisions_from_rows(run, [dict(row) for row in decision_rows]))
+
+    snapshot_row = (
+        conn.execute(select(t.portfolio_snapshots).where(t.portfolio_snapshots.c.run_id == run_id))
+        .mappings()
+        .one_or_none()
+    )
+    portfolio = snapshot_from_row(dict(snapshot_row)) if snapshot_row is not None else None
+
+    anchor_row = (
+        conn.execute(select(t.commitment_anchors).where(t.commitment_anchors.c.run_id == run_id))
+        .mappings()
+        .one_or_none()
+    )
+    anchor = CommitmentAnchor.model_validate(dict(anchor_row)) if anchor_row is not None else None
+
+    gate_rows = conn.execute(
+        select(t.gate_decisions)
+        .where(t.gate_decisions.c.run_id == run_id)
+        .order_by(t.gate_decisions.c.security_id)
+    ).mappings()
+    if run is None:
+        raise ValueError("gate decisions exist without their run record")
+    gates = tuple(
+        GateDecision(
+            run_id=row["run_id"],
+            security_id=row["security_id"],
+            as_of=run.as_of,
+            feature_set_version=row["feature_set_version"],
+            gate_model_version=row["gate_model_version"],
+            score=row["score"],
+            passed=row["passed"],
+            components=tuple(tuple(item) for item in (row["components"] or ())),
+        )
+        for row in gate_rows
+    )
+
+    return (
+        run,
+        commitment,
+        verdicts,
+        decisions,
+        portfolio,
+        anchor,
+        benchmark_replay_context(conn, run_id),
+        gates,
+    )
+
+
+def prior_committed_trial_runs(
+    conn: Conn, current: RunRecord, *, cutoff: datetime
+) -> tuple[RunRecord, ...]:
+    """Find earlier committed runs that could share this trial's durable configuration.
+
+    Prompt/model and feature/gate identity are deliberately checked by the caller from each run's
+    immutable evidence. This query only narrows candidates by mode, config, run time, and
+    commitment visibility at the admitted cutoff.
+    """
+    _check_ts(cutoff)
+    rows = conn.execute(
+        select(t.runs)
+        .join(t.decision_commitments, t.decision_commitments.c.run_id == t.runs.c.run_id)
+        .where(
+            t.runs.c.config_hash == current.config_hash,
+            t.runs.c.mode == current.mode.value,
+            t.runs.c.as_of < current.as_of,
+            t.decision_commitments.c.committed_at <= cutoff,
+            t.runs.c.status.in_(
+                (
+                    RunStatus.COMMITTED.value,
+                    RunStatus.ANCHORED.value,
+                    RunStatus.EXECUTED.value,
+                    RunStatus.SCORED.value,
+                    RunStatus.PARTIAL.value,
+                )
+            ),
+        )
+        .order_by(t.runs.c.as_of.desc(), t.runs.c.run_id)
+    ).mappings()
+    return tuple(RunRecord.model_validate(dict(row)) for row in rows)

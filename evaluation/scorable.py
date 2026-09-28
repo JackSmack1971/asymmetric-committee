@@ -129,6 +129,7 @@ class ScoringTicket:
     git_commit: str
     bitcoin_height: int
     bitcoin_block_time: datetime
+    run_as_of: datetime
     requested_at: datetime  # the clock reading at admission; scored_at must not precede it
 
     @property
@@ -299,6 +300,7 @@ def admit_run(
         git_commit=anchor.git_commit,
         bitcoin_height=confirmation.height,
         bitcoin_block_time=block_time,
+        run_as_of=run.as_of,
         requested_at=requested_at,
     )
 

@@ -65,6 +65,8 @@ from contracts.enums import (
 )
 from contracts.models import (
     AgentVerdict,
+    BenchmarkForecastBundle,
+    BenchmarkReplayContext,
     CalibrationFit,
     CommitteeDecision,
     CommitteeDecisionRecord,
@@ -78,6 +80,7 @@ from contracts.models import (
     StepArtifacts,
     VerdictRecord,
 )
+from evaluation.benchmarks import evaluation_parameters_sha256
 from orchestration.anchor_stage import AnchorResult
 from orchestration.execution_stage import ExecutionResult
 from risk import size_committee_book
@@ -114,6 +117,7 @@ class StepInputs:
     observations: Mapping[Horizon, Sequence[Observation]] = field(default_factory=dict)
     independent_periods: Mapping[Horizon, int] = field(default_factory=dict)
     history: History | None = None
+    gate_model_versions: tuple[str, ...] = ()
 
 
 class StepLoader(Protocol):
@@ -440,6 +444,18 @@ class BacktestOrchestrator:
         )
         now = self._clock()
         committed_run = self._run_record(a, RunStatus.COMMITTED, ended_at=now)
+        voters_by_token = _group(a.voters)
+        token_by_security = {entity.security_id: entity.entity_token for entity in inputs.entities}
+        replay_bundles = tuple(
+            BenchmarkForecastBundle(
+                security_id=security_id,
+                entity_token=token_by_security[security_id],
+                agent_verdicts=tuple(voters_by_token[token_by_security[security_id]]),
+                pooled_forecast=forecast,
+                bear_severity=bear.get(security_id),
+            )
+            for security_id, forecast in sorted(pooled.items())
+        )
         self._sink.flush_step(
             StepArtifacts(
                 run=committed_run,
@@ -450,6 +466,18 @@ class BacktestOrchestrator:
                     run_id=run_id,
                     sha256=commitment_hash(committed_run, records, snapshot),
                     committed_at=now,
+                ),
+                benchmark_replay_context=BenchmarkReplayContext(
+                    run_id=run_id,
+                    random_bundles=replay_bundles,
+                    calibration_fits=tuple(fits[h] for h in sorted(fits, key=int)),
+                    sizing_horizon=self._primary,
+                    risk_config_snapshot=self._cfg.risk.model_dump(mode="json"),
+                    feature_set_versions=tuple(
+                        sorted({entity.features.feature_set_version for entity in inputs.entities})
+                    ),
+                    gate_model_versions=tuple(sorted(set(inputs.gate_model_versions))),
+                    evaluation_parameters_sha256=evaluation_parameters_sha256(),
                 ),
                 dlq=_dlq_records(run_id, as_of, a.dlq),
             )

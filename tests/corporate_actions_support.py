@@ -174,6 +174,14 @@ EXAMPLES: dict[CorporateActionType, dict[str, Any]] = {
         "effective_date": "2024-03-19",
         "process_date": "2024-03-19",
     },
+    CorporateActionType.CAPITAL_GAINS_DISTRIBUTION: {
+        "id": "cgd-1",
+        "symbol": "AAA",
+        "rate": 0.25,
+        "ex_date": "2024-03-19",
+        "payable_date": "2024-03-28",
+        "process_date": "2024-03-19",
+    },
 }
 
 

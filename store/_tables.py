@@ -88,6 +88,18 @@ securities = Table(
     ),
 )
 
+# Append-only snapshots of the SIC most recently observed from SEC submissions.
+sic_history = Table(
+    "sic_history",
+    metadata,
+    _sid(),
+    Column("sic", Integer, nullable=False),
+    *_bitemporal(),
+    UniqueConstraint("security_id", "event_time", "source_version", name="uq_sic_history"),
+    CheckConstraint("sic BETWEEN 0 AND 9999", name="ck_sic_history_range"),
+    Index("ix_sic_history_sid_avail", "security_id", "available_at"),
+)
+
 # --- fact tables (bitemporal) ----------------------------------------------------------------
 
 # Hypertable on event_time. Natural key (security_id, event_time); source_version is the feed.
@@ -249,6 +261,8 @@ gate_decisions = Table(
     Column("score", Double, nullable=False),
     Column("passed", Boolean, nullable=False),
     Column("components", JSONB, nullable=False),
+    Column("feature_set_version", Text),
+    Column("gate_model_version", Text),
     UniqueConstraint("run_id", "security_id", name="uq_gate_decisions"),
 )
 
@@ -416,13 +430,81 @@ fills = Table(
 outcomes = Table(
     "outcomes",
     metadata,
+    Column("revision_id", BigInteger, primary_key=True, autoincrement=True),
     _run_id(),
     _sid(),
     Column("horizon", Integer, nullable=False),
     Column("fwd_return", Double, nullable=False),
-    Column("sector_fwd_return", Double),
+    Column("sector_fwd_return", Double, nullable=False),
     _ts("scored_at"),
-    UniqueConstraint("run_id", "security_id", "horizon", name="uq_outcomes"),
+    Column("completeness", Text, nullable=False, server_default="COMPLETE"),
+    Column("evidence_revision_sha256", Text, nullable=False),
+    _ts("resolved_at"),
+    UniqueConstraint(
+        "run_id", "security_id", "horizon", "evidence_revision_sha256", name="uq_outcomes_revision"
+    ),
+    CheckConstraint("completeness IN ('COMPLETE', 'HALTED')", name="ck_outcomes_completeness"),
+    CheckConstraint("horizon IN (5, 21, 63)", name="ck_outcomes_horizon"),
+    CheckConstraint("fwd_return >= -1 AND sector_fwd_return >= -1", name="ck_outcomes_returns"),
+)
+
+benchmark_results = Table(
+    "benchmark_results",
+    metadata,
+    Column(
+        "run_id", UUID(as_uuid=True), ForeignKey("runs.run_id"), nullable=False, primary_key=True
+    ),
+    Column("week_start", Date, primary_key=True),
+    Column("benchmark", Text, primary_key=True),
+    Column("variant", Text, primary_key=True),
+    Column("gross_return", Double, nullable=False),
+    Column("cost_return", Double, nullable=False),
+    Column("net_return", Double, nullable=False),
+    Column("turnover", Double, nullable=False),
+    _ts("outcome_cutoff"),
+    Column("commitment_sha256", Text, nullable=False),
+    Column("trial_identity_sha256", Text, nullable=False),
+    Column("input_sha256", Text, nullable=False),
+    Column("provenance_sha256", Text, nullable=False),
+    Column("replay_inputs", JSONB, nullable=False),
+    Column("random_summary", JSONB(none_as_null=True)),
+    Column("k", Integer),
+    Column("seed_sha256", Text),
+    Column("completeness", Text, nullable=False),
+    CheckConstraint(
+        "benchmark IN ('spy', 'exposure_matched_spy', 'equal_weight_universe', "
+        "'sector_etf_matched', 'quant_baseline_book', 'random_committee')",
+        name="ck_benchmark_results_identity",
+    ),
+    CheckConstraint("variant IN ('adjusted', 'unadjusted')", name="ck_benchmark_results_variant"),
+    CheckConstraint("net_return = gross_return - cost_return", name="ck_benchmark_results_net"),
+    CheckConstraint("cost_return >= 0 AND turnover >= 0", name="ck_benchmark_results_cost"),
+    CheckConstraint(
+        "completeness IN ('COMPLETE', 'HALTED')", name="ck_benchmark_results_completeness"
+    ),
+    CheckConstraint(
+        "(benchmark = 'random_committee' AND k = 1000 AND seed_sha256 IS NOT NULL) OR "
+        "(benchmark <> 'random_committee' AND k IS NULL AND seed_sha256 IS NULL)",
+        name="ck_benchmark_results_random_replay",
+    ),
+    CheckConstraint(
+        "(benchmark = 'random_committee' AND random_summary IS NOT NULL) OR "
+        "(benchmark <> 'random_committee' AND random_summary IS NULL)",
+        name="ck_benchmark_results_summary",
+    ),
+)
+
+benchmark_replay_contexts = Table(
+    "benchmark_replay_contexts",
+    metadata,
+    Column("run_id", UUID(as_uuid=True), ForeignKey("runs.run_id"), primary_key=True),
+    Column("replay_context", JSONB, nullable=False),
+    Column("evidence_sha256", Text, nullable=False),
+)
+Index(
+    "ix_benchmark_results_trial_week",
+    benchmark_results.c.trial_identity_sha256,
+    benchmark_results.c.week_start,
 )
 
 agent_scores = Table(
@@ -523,6 +605,40 @@ execution_references = Table(
         "OR reason = 'calendar_uncovered'))",
         name="ck_execution_references_status",
     ),
+)
+
+# The following week's endpoint for the original run's benchmark period. Keeping this separate
+# from the entry reference preserves the P6.3 `(run_id, symbol_ref)` contract while binding both
+# immutable endpoint observations to one strategy run.
+benchmark_period_references = Table(
+    "benchmark_period_references",
+    metadata,
+    Column("run_id", UUID(as_uuid=True), ForeignKey("runs.run_id"), primary_key=True),
+    Column("symbol_ref", Text, primary_key=True),
+    Column("period_start", Date, nullable=False),
+    _ts("ref_time", nullable=True),
+    Column("mode", Text, nullable=False),
+    Column("status", Text, nullable=False),
+    Column("reason", Text),
+    Column("price", Double),
+    Column("source", Text),
+    _ts("trade_time", nullable=True),
+    Column("trade_tape", Text),
+    Column("trade_conditions", ARRAY(Text), nullable=False, server_default="{}"),
+    Column("trade_id", Text),
+    Column("session_date", Date, nullable=True),
+    _ts("available_at"),
+    Column("ingested_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("source_version", Text, nullable=False),
+    CheckConstraint(
+        "(status = 'resolved' AND price IS NOT NULL AND source IS NOT NULL AND reason IS NULL "
+        "AND ref_time IS NOT NULL AND session_date IS NOT NULL AND session_date > period_start) "
+        "OR (status = 'unresolved' AND price IS NULL AND source IS NULL AND reason IS NOT NULL "
+        "AND ((ref_time IS NOT NULL AND session_date IS NOT NULL) "
+        "OR reason = 'calendar_uncovered'))",
+        name="ck_benchmark_period_references_evidence",
+    ),
+    Index("ix_benchmark_period_references_session", "session_date", "available_at"),
 )
 
 # Written in the halt transaction; never holds symbols (the sweeper reconstructs them).
@@ -644,6 +760,9 @@ corporate_action_coverage = Table(
     Column("data_quality", Text, nullable=False),
     Column("region", Text, nullable=False),
     Column("page_count", Integer, nullable=False),
+    Column("pagination_exhausted", Boolean, nullable=False, server_default="false"),
+    Column("full_history", Boolean, nullable=False, server_default="false"),
+    Column("provider_lower_bound", Date),
     Column("action_count", Integer, nullable=False),
     Column("actions_sha256", Text, nullable=False),
     Column("knowledge_basis", Text, nullable=False),
@@ -731,11 +850,13 @@ FACT_TABLES: tuple[Table, ...] = (
     news_items,
     features,
     universe_snapshots,
+    sic_history,
     trading_calendar,
 )
 HYPERTABLES: tuple[Table, ...] = (price_bars, features)
 IMMUTABLE_TABLES: tuple[Table, ...] = (
     fundamentals_asfiled,
+    sic_history,
     decision_commitments,
     run_resets,
     trading_calendar,
@@ -743,6 +864,7 @@ IMMUTABLE_TABLES: tuple[Table, ...] = (
     tbill_rates,
     tbill_vintage_coverage,
     execution_references,
+    benchmark_period_references,
     halt_reference_requests,
     halt_reference_symbol_sets,
     halt_references,
@@ -753,4 +875,6 @@ IMMUTABLE_TABLES: tuple[Table, ...] = (
     delisting_filings,
     identity_conflicts,
     delistings,
+    benchmark_results,
+    benchmark_replay_contexts,
 )

@@ -133,6 +133,19 @@ class Security(Contract):
     listed_to: date | None
 
 
+class SicObservation(Fact):
+    """A SIC snapshot from an SEC submissions response, available when first observed."""
+
+    security_id: SecurityId
+    sic: Annotated[int, Field(ge=0, le=9999)]
+
+    @model_validator(mode="after")
+    def _observation_time(self) -> Self:
+        if self.available_at < self.event_time:
+            raise ValueError("SIC observation cannot be available before it was observed")
+        return self
+
+
 AliasText = Annotated[str, Field(min_length=1, max_length=256, pattern=r"^\S(?:.*\S)?$")]
 
 
