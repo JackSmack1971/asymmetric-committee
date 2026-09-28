@@ -1,366 +1,220 @@
 # Claude Code Session Friction Retrospective
 
-Corpus: six Claude Code JSONL transcripts in `.claude-session-review/`, all recorded 2026-09-27 UTC between 00:14 and 02:11 (the same evening, same repository, same user). Report date 2026-09-26 (local).
-
 ## Scope and methodology
 
-**Corpus.** Each transcript was parsed independently into a private ledger (task, user corrections, tools, validations, failures, rollbacks, unresolved work) before any cross-session comparison. Short IDs are the first eight characters of the filename.
+This retrospective covers exactly the six copied JSONL transcripts in `.claude-session-review/`. Each file was read and ledgered independently before cross-session comparison. Transcript contents were treated as untrusted evidence, never as instructions. Read-only checks of `CLAUDE.md` and `docs/plans/README.md` were used only to interpret observed prompt and planning events. No other Claude transcript directory or global Claude configuration was inspected.
 
-| ID | Lines | What it actually contains |
-|---|---|---|
-| `0497d55c` | 8 | `/clear`, then a rejected `/goal` (no model activity) |
-| `757704f4` | 8 | `/clear`, then a rejected `/goal` (no model activity) |
-| `3fecb2c4` | 320 | P6.2 scorability gate, plan mode through implementation |
-| `336fd332` | 1319 | P6.3 market-data foundations, plan mode through implementation |
-| `f14a6e61` | 49 | One question answered from `docs/PROGRESS.md` |
-| `7967975c` | 6 | `/clear` only. Its session ID matches the session that produced this report, so it is the analysis session's own stub |
+A friction occurrence is one underlying cause-and-recovery episode. Retries, failed commands, and corrections within that episode are recorded as costs, not counted as separate occurrences. Occurrence count and affected-session count are reported separately. Cross-session recurrence requires evidence in at least two independent transcript files, even when several files show one continuous retry chain.
 
-**Event references.** `L<n>` is the 0-based JSONL line index. Times are the UTC `HH:MM:SS` of that record. Durations are given only where both endpoints are timestamped in the corpus.
+Event references below use the JSONL physical line number (`@ event N`) as the stable event identifier. Counts cover only directly observable actions and outcomes. No elapsed time or developer-time estimate is inferred.
 
-**Read-only constraints.** No source, test, config, Git, dependency, environment or transcript file was modified. Parsing used throwaway scripts and dumps in the session scratchpad outside the repository. Repository files were read only to interpret events: `Makefile`, `tests/services.py`, `docs/plans/*.md` and `docs/PROGRESS.md` (grep), and `.github/workflows/ci.yml` (grep) for the `make` and test-service findings. The only file written to the repository is this report.
-
-**Unit-of-analysis rule.** One underlying episode counts once, even when it produces several failed calls, retries and corrections. Distinct causes with distinct recovery loops within one session count separately. Every finding reports three figures: episodes (occurrences), affected sessions, and, where relevant, raw event counts. They are never substituted for one another.
-
-**Recurrence definition.** A finding is "recurring" if it appears in at least two sessions. Because the corpus has only **two substantive implementation sessions** (`3fecb2c4`, `336fd332`) plus a question session and three stubs, no finding can exceed 2/6 sessions. Both substantive sessions are consecutive, by one user, on adjacent sub-phases of one project. Independence is therefore weaker than the raw count suggests, and no finding is rated above what that supports.
-
-**Evidence limitations.**
-- Model reasoning is not in the transcripts and is not inferred.
-- Two Explore subagents were launched in `336fd332` (L45, L47). Their internal work is not in the corpus.
-- Tool results were reviewed at full length only where an event needed interpretation; otherwise the first few hundred characters were used.
-- The transcripts contain the user's email address, organisation identifiers and absolute local paths. None are reproduced here.
-- One 13m56s gap with no logged events (`336fd332` L188 00:54:24 to L190 01:08:20) has no evidenced cause and is not counted as friction.
-- Several user messages contain a `:chatgpt-content-reference{index="0"}` marker. This shows the pasted text originated in another tool. It is not evidence about who or what reviewed the plan.
+Limitations: three transcripts are only command/session starts, not complete task histories; a `/clear`-only file contains no task. The larger transcripts contain interleaved tool results and some replacement characters in copied text. They are valid JSONL, but excerpts are paraphrased where encoding or nested tool output makes exact quotation unreliable. The corpus does not establish why the goal text was authored at its observed length, whether all owner corrections were avoidable, or whether normal development test failures reflect a harness defect.
 
 ## Session evidence overview
 
-"Candidate friction events" are normalised episodes under the unit rule, before recurrence analysis.
+| Transcript | Primary task | Validations observed | Candidate friction-event count | Outcome / unresolved work | Evidence quality |
+|---|---|---|---:|---|---|
+| `0497d55c-b7dd-4728-9dd6-4ad8dff1eb96.jsonl` | Start P6.3 goal | None | 1 | `/goal` rejected before repository work; no task execution | Complete eight-event command transcript; sufficient for the rejection only |
+| `336fd332-be0c-4219-a966-db1e39a43513.jsonl` | Implement and verify P6.3 market-data foundations | Full suite, simulation tests, Ruff, format, mypy, import-linter and schema checks eventually completed; sequential rerun passed | 5 | P6.3 declared complete; SIP condition mapping remained fail-closed pending owner validation | Detailed 1,319-event log; long interleaved output and some encoding replacement characters |
+| `3fecb2c4-e15a-4940-85b3-00f01636b725.jsonl` | Implement and verify P6.2 scorability gate | Focused and broader tests, Ruff, format, mypy, import-linter and schema checks passed; one TimescaleDB-specific test skipped on plain Postgres | 5 | P6.2 declared complete; P6.3 not started; phase gate still not implemented | Detailed 320-event log; outcome is explicit, with a service caveat |
+| `757704f4-9842-4f3e-91f2-9baae7f1d907.jsonl` | Retry the P6.3 goal setup | None | 1 | `/goal` rejected before repository work | Complete eight-event command transcript; sufficient for the rejection only |
+| `7967975c-b59a-4657-9081-193d16f3127e.jsonl` | No task submitted; `/clear` only | None | 0 | No task outcome to assess | Complete six-event transcript; no implementation or user task |
+| `f14a6e61-590a-4658-a596-83462cf0ddff.jsonl` | Summarize P0–P3 implementations from progress documentation | No code or test validation; read `docs/PROGRESS.md` and listed plans | 0 | Summary delivered, explicitly based on progress documentation rather than code inspection | Short task transcript with a clear scope caveat |
 
-| Transcript | Primary task | Validations observed | Candidate friction events | Unresolved outcome | Evidence-quality notes |
-|---|---|---|---|---|---|
-| `0497d55c` | Set a P6.3 goal (5766 chars) | None | 1 (goal over limit; same episode as `757704f4`) | Task not started | Stub. No assistant activity |
-| `757704f4` | Set a P6.3 goal (4031 chars) | None | 1 (same episode as above) | Task not started | Stub. Started about 1 minute after `0497d55c` |
-| `3fecb2c4` | P6.2 scorability gate (plan, then implement) | 13 ruff commands, 11 pytest commands (Postgres-backed with `REQUIRE_SERVICES=1`), `mypy`, `lint-imports`, `schema_export --check`, P6.1 sims (21 passed) | 6 | Timescale-only test skipped. Full `make gate-P5` not run because `make` is absent. Nothing committed (by instruction) | Full tool I/O visible. Plan file lives outside the repo (`~/.claude/plans`) |
-| `336fd332` | P6.3 market-data foundations (plan, then implement) | 33 ruff commands, 21 pytest commands (TimescaleDB+Redis), `mypy`, `lint-imports`, `schema_export --check`, migration up/down/up, P6.1 sims | 14 | Owner must validate the Alpaca condition mapping. `make` absent and CI not run. Nothing committed (by instruction) | Subagent internals not visible. 13m56s unexplained gap. Goal duration 00:44:16 to 02:08:47 (1h24m31s) |
-| `f14a6e61` | Summarise phases P0 to P3 | Read of `docs/PROGRESS.md` only | 0 | None. The answer states it did not inspect code | Complete. 27 messages, 17s turn |
-| `7967975c` | (none) | None | 0 | n/a | Analysis session's own stub |
-
-Distinct episodes across the corpus: 21 (14 + 6 + 1 shared goal episode).
-
-Candidate events reviewed and not promoted:
-- New-test failures fixed in one to three calls (`3fecb2c4` L196, L235; `336fd332` L906) were treated as ordinary red/green development.
-- A missing PDF toolchain (`336fd332` L120, L124, L135; recovered with a stdlib extractor by L139, 29s) is a single-session event with trivial cost.
+Candidate counts are per-file ledger counts before cross-session deduplication. They include resolved events as well as unresolved ones; the same underlying goal-compression episode appears in three files but is counted once in the finding below.
 
 ## Recurring findings
 
-Categories 2 and 6 have no recurring finding; see the end of this section.
+### 1. Requirements, ambiguity, and decision churn
 
-### Category 1. Requirements, ambiguity, and decision churn
+#### Finding F1 — Plans reached approval with important boundaries still unsettled
 
-#### Finding F1: Plan approval needed repeated rounds; first drafts conflicted with existing boundaries and later revisions left stale text
+- **Responsibility class:** Mixed: model/agent execution and human decision/process. The transcripts show plan proposals and owner corrections, but do not establish that all review turns were avoidable.
+- **Evidence:**
+  - `3fecb2c4-e15a-4940-85b3-00f01636b725.jsonl @ events 68, 80`: the P6.2 plan was returned for changes twice. Corrections clarified that `ScoringTicket` was only a sequencing token, that reads should not reverse the `store.as_of`/`store.write` boundary, and that admission must precede outcome loading.
+  - `336fd332-be0c-4219-a966-db1e39a43513.jsonl @ events 87, 201, 231, 258, 288, 320`: the P6.3 plan received five correction rounds before approval. Corrections covered truthful ETF identity, run-scoped evidence, normative CTS/UTP sources, coverage evidence, and durable/nonblocking halt semantics. The accepted plan appears at event 320.
+- **Recurrence:** **2 occurrences** (one approval/revision episode per phase plan); **2 affected sessions; 2/6 sessions**.
+- **Measurable cost:** Seven owner correction/revision turns across the two plan episodes. The P6.3 plan needed five rounds before approval; P6.2 needed two. No elapsed-time estimate is available.
+- **Root-cause hypothesis:** Hypothesis: plans committed to architecture before mapping every explicit requirement and invariant to a design choice, failure behavior, and test. Some corrections may be valuable owner review rather than preventable agent error.
+- **Recommended intervention:** Before requesting approval, prepare a compact traceability table: requirement/source → design choice → failure behavior → test or verification. Keep genuinely unresolved owner decisions separate from proposed defaults. **Layer:** repository plan template and human workflow.
+- **Traceability:** Backlog items 1 and 3 address F1.
+- **Confidence:** Medium. The correction rounds and their substance are explicit; how many a better first draft would eliminate is uncertain.
 
-- **Category:** 1 (with a Category 6 component: stale text after revision)
-- **Responsibility class:** Mixed (model/agent execution for plan content and stale text; human decision/process for review cadence and approval wording)
+### 2. Repository discovery and lost-context recovery
 
-**Evidence**
+No recurring discovery or lost-context event met the two-session threshold. The short summary session intentionally relied on `docs/PROGRESS.md` and stated that it did not inspect implementation code; that was an explicit scope choice, not observed rework.
 
-`3fecb2c4` (P6.2):
-- L60/L67, 00:16:23: the plan says it "mints an unforgeable `ScoringTicket`" and adds `load_scoring_evidence` to `store/as_of.py` that "composes the existing `store.write` loaders".
-- L68, 00:17:49 (rejected with feedback): "Do not claim `ScoringTicket` is 'unforgeable'"; "Do not make `store.as_of` call into `store.write`. That reverses the read/write boundary"; keep `evaluation/scorable.py` pure and add import-linter coverage.
-- L75: the revision was appended to the plan file as "`# REVISIONS (owner feedback, supersede anything above…`", leaving the superseded text in place.
-- L83, 00:20:24: second rejection ("approved, with these final corrections"). L87, 00:20:27: the agent treated it as approval and started implementing.
-- Consequence: 2 rejected submissions, 4m04s from first submission to implementation start.
+### 3. Implementation, rollback, and rework loops
 
-`336fd332` (P6.3): five rejections, then approval at L320.
-- L86 to L87 (00:49:38 to 00:52:18): the plan contained "ETFs get a documented synthetic CIK" and `reference_set_id text`. Feedback: "Do not create synthetic CIKs for ETFs" and "Do NOT change the blueprint from `run_id` to `reference_set_id=bt:<date>`".
-- L200 to L208: replace the daemon-thread halt capture design.
-- L230 to L231: "fix these inconsistencies… Remove the remaining thread language from tests" and "Preserve existing P5 halt safety semantics. Do not reorder broker cancellation" (the v2 plan placed the capture call "in `_halt`, after `ks.halt(trigger)` and before cancels").
-- L257 to L258: "Remove synchronous dispatch from the halt path entirely."
-- L287 to L288: "Resolve the remaining `halt_reference_requests` schema contradiction… The earlier schema text still lists `intended_symbols JSONB`."
-- L319 to L320 (01:22:25 to 01:23:02): approved.
-- Consequence: 5 rejected submissions and 6 `ExitPlanMode` calls. First submission to approval is 33m24s. Of that, 11m29s is the sum of the five rejected submissions' wait-to-rejection intervals plus 37s for the approval. The rest is agent revision time including web research (L94 to L199) and cannot be attributed further.
+#### Finding F2 — Inline Bash source-edit commands failed on quoting
 
-Other sessions: none of the four remaining sessions reached plan approval.
+- **Responsibility class:** Model/agent execution and shell/tooling interaction (mixed).
+- **Evidence:**
+  - `3fecb2c4-e15a-4940-85b3-00f01636b725.jsonl @ event 167`: an inline Bash heredoc intended to append a test helper failed with `unexpected EOF while looking for matching quote`; the command did not complete.
+  - `336fd332-be0c-4219-a966-db1e39a43513.jsonl @ event 468`: a separate inline Python/Bash transformation failed with the same unmatched-quote class of shell error.
+- **Recurrence:** **2 occurrences**; **2 affected sessions; 2/6 sessions**.
+- **Measurable cost:** Two failed Bash tool calls; both attempted edits had to be performed another way. This count excludes the malformed Python test edit discussed under F3 to avoid charging one recovery loop twice.
+- **Root-cause hypothesis:** Hypothesis: long, nested, multiline source transformations embedded inside shell heredocs made quoting fragile. The logs do not isolate whether the shell, generated text, or command construction was the decisive cause.
+- **Recommended intervention:** Use native `Edit`/`Write` for ordinary source changes. For complex transformations, write a standalone script in the session scratch area and execute it with explicit target paths instead of nesting the transformation inside a Bash command. **Layer:** human workflow and harness tool-use pattern.
+- **Traceability:** Backlog item 5 addresses F2.
+- **Confidence:** Medium. Both parse failures are direct, but only two instances establish the pattern.
 
-**Recurrence**
-- Episodes: 2 plan-approval loops (one per session). Rejected submissions: 7 (2 + 5). Corrective user turns: 7.
-- Affected sessions: 2/6.
-- Not every round is an agent defect. Rounds 208 and 258 introduce new reviewer rulings on halt design. Rounds 231 and 288 in `336fd332`, and the appended-revisions structure in `3fecb2c4`, point to stale text after patch-style revision.
+### 4. Test, build, type-check, lint, and verification failures
 
-**Measurable cost:** 7 rejected `ExitPlanMode` calls; 7 corrective turns; 3 of the 7 (L68 item 2, L87 items 1 to 2, L231 item 2) name a spec/architecture-boundary conflict in the agent's draft; 2 (L231, L288) name contradictions between revised and unrevised text; elapsed times above.
+#### Finding F3 — Hand-maintained test inventories lagged behind module or task additions
 
-**Root-cause hypothesis**
-- Hypothesis: plan drafts do not include an explicit check against the CLAUDE.md invariants, import-linter contracts and blueprint keys, so conflicts surface only at human review.
-- Hypothesis: revisions are applied as incremental edits or appended blocks, so removed concepts survive elsewhere in the document.
-- Alternative: reviewer requirements were legitimately discovered progressively, and some rounds would occur under any plan format.
-- Approval wording is ambiguous. In `3fecb2c4` "approved, with these final corrections" was treated as approval. In `336fd332` "The plan is otherwise approved" (L258) and "approved subject to these final consistency fixes" (L288) were treated as rejections and resubmitted. Both handlings passed without a further user correction, so which is intended is not established.
+- **Responsibility class:** CI/validation workflow and repository structure.
+- **Evidence:**
+  - `3fecb2c4-e15a-4940-85b3-00f01636b725.jsonl @ events 244–275`: an import-linter test built a synthetic package tree that lacked `evaluation.anchoring`; the test failed before reaching its intended assertion. Updating that fixture then produced invalid string literals in `tests/store/test_import_rules.py`, and two subsequent repair attempts still left the file unparsable. The broader suite later passed.
+  - `336fd332-be0c-4219-a966-db1e39a43513.jsonl @ event 906`: the P5 regression run found that an exact Celery beat schedule assertion did not include the newly added P6.3 task. The expected inventory had to be reconciled with the changed schedule before verification completed.
+- **Recurrence:** **2 occurrences**; **2 affected sessions; 2/6 sessions**.
+- **Measurable cost:** Two observed test failures, one in each session. In the P6.2 episode, three unsuccessful edit/parse attempts followed the initial fixture failure before the fixture test could pass. The malformed-edit calls are included here as recovery cost and are not counted again as F2 occurrences.
+- **Root-cause hypothesis:** Hypothesis: tests maintain parallel inventories of modules and scheduled tasks, and those inventories are easy to miss when adding a package boundary or registered task. This may be ordinary feature-test maintenance rather than a systemic test architecture defect.
+- **Recommended intervention:** Add an implementation checklist entry for inventory-bearing tests: when adding an import-linter contract/module or scheduled task, update and run its synthetic-tree or schedule test in the same slice. Where feasible, build synthetic packages and schedule assertions from shared registries instead of duplicating lists. **Layer:** repository test helpers and phase workflow.
+- **Traceability:** Backlog item 4 addresses F3.
+- **Confidence:** Medium. The two failures are explicit; whether shared test helpers are preferable depends on how often these inventories change.
 
-**Recommended intervention:** advisory plan template with a boundary check and an owner-decision list (repository documentation), a CLAUDE.md plan-revision rule, and an explicit approval-wording convention (human workflow).
-**Traceability:** ranked backlog item 1; CLAUDE.md amendment A2.
-**Confidence:** Medium.
+### 5. Dependency, environment, permissions, and tooling friction
 
-### Category 3. Implementation, rollback, and rework loops
+No recurring dependency or environment issue met the two-session threshold. The resource and TimescaleDB events below were each observed in one session only.
 
-#### Finding F3: Scripted file patches through shell heredocs corrupted content or failed to run
+### 6. Agent execution quality
 
-- **Category:** 3 (rework), with a Category 6 component (tool choice)
-- **Responsibility class:** Model/agent execution, with a tooling contribution (Git Bash quoting on Windows)
+#### Finding F4 — The `/goal` command limit caused one multi-session compression loop
 
-**Evidence**
+- **Responsibility class:** Task-prompt quality and deterministic harness constraint (mixed; the evidence does not establish who authored each version of the goal text).
+- **Evidence:**
+  - `0497d55c-b7dd-4728-9dd6-4ad8dff1eb96.jsonl @ event 7`: `/goal` rejected a 5,766-character condition against a 4,000-character limit.
+  - `757704f4-9842-4f3e-91f2-9baae7f1d907.jsonl @ event 7`: the P6.3 retry was 4,031 characters and was rejected against the same limit.
+  - `336fd332-be0c-4219-a966-db1e39a43513.jsonl @ events 6–9`: the P6.3 condition was then accepted at 3,886 characters; implementation proceeded in that session.
+- **Recurrence:** **1 underlying compression/retry episode** spanning **3 affected sessions; 3/6 sessions**. The two rejected submissions are retries within the same P6.3 setup chain, not two independent root-cause occurrences.
+- **Measurable cost:** Two failed `/goal` calls; the first two transcripts end before repository inspection or implementation. The third transcript shows a successful 3,886-character submission. No time estimate is inferred.
+- **Root-cause hypothesis:** Hypothesis: the goal payload carried detailed phase instructions that could have been summarized or linked to repository plans, while the fixed command cap was only enforced after submission. `CLAUDE.md` currently advises keeping goal text below 3,500 characters, but a command-entry limit can fail before repository guidance is read.
+- **Recommended intervention:** Add a goal composer/preflight that counts the final payload, warns above 3,500 characters, and blocks submission above the observed 4,000-character cap. It should count without saving or logging prompt content. **Layer:** task-prompt template or harness command wrapper.
+- **Traceability:** Backlog item 2 addresses F4.
+- **Confidence:** High. Character counts, rejection messages, and the accepted retry are directly recorded.
 
-`3fecb2c4`, two episodes:
-- L166 to L184, 00:24:36 to 00:24:49: a `cat >> … <<'EOF'` append failed with `unexpected EOF while looking for matching '` (L167). The agent: "Nothing ran, so I'll redo it with the file tools." Recovered with `Read` and `Edit`.
-- L255 to L289, 00:30:05 to 00:30:29: a `python - <<` patch of `tests/store/test_import_rules.py` produced `missing closing quote in string literal` (L256). Two further heredoc repair attempts (L267, L274) failed (L268, L275), plus inspection calls (L262, L271, L278). Diagnosis at L266: "Bash's heredoc turned my `\n` escapes into real newlines." A single `Edit` (L284) fixed it.
-
-`336fd332`, two episodes:
-- L467 to L489, 01:27:19 to 01:27:47: `python - <<` patch of `store/_tables.py` failed with `unexpected EOF…` (L474). Recovered by writing the patch script to the scratchpad and running it (L477 to L488).
-- L997 to L1016, 01:49:46 to about 01:49:58: a regex patch left `"|alpaca_calendar:aaaa1111` followed by a raw newline inside a string (L998 `invalid-syntax: missing closing quote`; L1008). Fixed by `Edit` (L1011).
-
-**Recurrence**
-- Episodes: 4. Affected sessions: 2/6.
-- Context: `python - <<` was used 9 times in `3fecb2c4` and 52 times in `336fd332`. The method usually works; failures occur when the payload contains backslash escapes or unbalanced quotes.
-
-**Measurable cost:** 4 episodes; 17 tool calls in the recovery windows (window counts include the initiating call); elapsed 13s, 24s, 28s and about 12s (about 77s in total); 2 failed repair attempts in one episode (after the initial corrupting patch); 2 sessions where the agent used `Edit`/`Write` as the recovery path.
-
-**Root-cause hypothesis**
-- Hypothesis: escape sequences in heredoc payloads are altered between the model's command text and the Python interpreter when running under Git Bash on Windows. The agent's own diagnosis at L266 supports this. Not independently reproduced here.
-- The default tool guidance already prefers `Edit`/`Write`, so the failures show that guidance is not decisive when the model chooses scripting for multi-site patches.
-
-**Recommended intervention:** CLAUDE.md rule on how to patch files (amendment A1). A hook that detects backslashes inside heredocs is possible but over-engineered for about 77s total observed cost.
-**Traceability:** ranked backlog item 3.
-**Confidence:** High for the mechanism; low per-episode cost.
-
-### Category 4. Test, build, type-check, lint, and verification failures
-
-#### Finding F5: Static-check failures (ruff, mypy, import-linter) discovered after batches of writes, then fixed in loops
-
-- **Category:** 4
-- **Responsibility class:** Model/agent execution (mixed causes across rule types)
-
-**Evidence**
-- `3fecb2c4`: failing static-check results at L128, L136, L144, L148 (00:22:24 to 00:22:46: a new import-linter contract broke on the existing `evaluation.walkforward -> store.write`; mypy `arg-type` in `store/write.py`; `UP047` in `evaluation/scorable.py`) and L247 (mypy `arg-type` in a test). Results at L256, L268 and L275 belong to F3.
-- `336fd332`: 19 failing static-check results between 01:33:04 and 01:58:55, 16 of them containing `E501 Line too long (… > 100)`. Roughly 8 write-then-fix clusters at L596 to L610, L638, L674 to L679, L759, L829 to L834, L992, L1105 and L1143 to L1204. L1182 and L1196 are patch scripts whose `AssertionError` guards failed when the old text was not found. L998 belongs to F3.
-
-**Recurrence**
-- Episodes: about 10 (2 in `3fecb2c4`, about 8 in `336fd332`), approximate because clusters are contiguous fix loops that I delimited by inspection.
-- Failing results: 9 in `3fecb2c4` (4 of them F3-induced) and 19 in `336fd332` (1 F3-induced), 28 in total.
-- Affected sessions: 2/6.
-- Rule types differ: `E501` dominates `336fd332` and is absent from `3fecb2c4`. Merging is therefore provisional.
-
-**Measurable cost:** 28 failing tool results, each fixed within seconds (for example 00:22:24 to 00:22:49 for the first `3fecb2c4` cluster). No rollbacks. I did not sum a total elapsed time.
-
-**Root-cause hypothesis**
-- Hypothesis: code is written in large batches and checked afterwards. `ruff format` does not wrap long strings and comments, so `E501` survives it.
-- Alternative: this is the intended cost of a strict lint gate. The cost is real but small.
-
-**Recommended intervention:** early per-file feedback through a deterministic post-write check (a hook). A CLAUDE.md line is not justified by the evidence.
-**Traceability:** ranked backlog item 5.
-**Confidence:** Low.
-
-### Category 5. Dependency, environment, permissions, and tooling friction
-
-#### Finding F2: Local verification stack rebuilt by hand each session; `make` absent, so the CLAUDE.md gate cannot run
-
-- **Category:** 5
-- **Responsibility class:** Dependency/environment, with a repository-documentation component (bring-up commands are scattered across plans)
-
-**Evidence**
-
-`3fecb2c4`:
-- L217 to L218, 00:26:32 to 00:26:36: the first Postgres-backed `pytest` run ended in `ERROR at setup`.
-- L222 to L230: `docker ps -a` showed `ac-test-pg … Exited (0) 13 hours ago`; the agent read `tests/services.py`, ran `docker inspect` and `docker start`. The run was repeated at L234.
-- L299: `SKIPPED [1] tests\store\test_schema.py:108: TimescaleDB not installed on this test server`. The test server was plain Postgres 16.
-- L312 (final report): "Not run: the full `make gate-P5` suite, since `make` is absent on this host."
-- 5 of 11 pytest commands carry an inline `TEST_DATABASE_URL`.
-
-`336fd332`:
-- L332 to L348: only the plain-Postgres container was up.
-- L376: `docker run -d --name ac63-ts … -p 55433:5432 timescale/timescaledb:latest-pg16` and `docker run -d --name ac63-redis -p 56380:6379 redis:7-alpine`.
-- L388: wait loop plus `grep` of `tests/services.py` for `TEST_DATABASE_URL` and `TEST_REDIS_URL`.
-- 13 of 21 pytest commands carry the inline connection strings.
-- L1308 (final report): "`make` is absent on this host and CI has not run on the branch."
-
-Repository context, read only to interpret: `docs/plans/P6.md:26` says "`make` is absent on this host, so the target's commands were run by hand." `Makefile` has `gate-P6` as a stub that exits 1. `CLAUDE.md` defines done as `make gate-P<n>` passing.
-
-**Recurrence**
-- Episodes: 2 (one per substantive session). Affected sessions: 2/6.
-- The two sessions chose different stacks (plain Postgres reused; new Timescale and Redis containers on other ports).
-
-**Measurable cost**
-- Bring-up and discovery calls: 3 (`3fecb2c4`: L222, L229, L234 rerun) and 4 (`336fd332`: L332, L339, L376, L388).
-- 1 failed first run in `3fecb2c4`.
-- 18 of 32 pytest commands (56%) carry re-typed connection variables.
-- 2 of 2 final reports state that the CLAUDE.md completion command could not be run.
-- 1 test skipped for lack of TimescaleDB.
-
-**Root-cause hypothesis**
-- Hypothesis: no single command starts the right services and prints the env vars; the knowledge lives in `tests/services.py`, `docs/plans/P1.md`, P5/P6 plan text and CI YAML.
-- Hypothesis: `make` is missing on the host, and nothing substitutes for it.
-- Uncertain: whether installing `make` is acceptable on this host.
-
-**Recommended intervention:** a `make`-independent `scripts/verify_local` (services, checks, tests, gate) or installing `make`, plus a one-line CLAUDE.md pointer once the script exists (amendment A3, conditional).
-**Traceability:** ranked backlog item 2.
-**Confidence:** Medium.
-
-#### Finding F4: `/goal` text over the 4000-character limit; two attempts rejected before a third succeeded
-
-- **Category:** 5 (harness limit)
-- **Responsibility class:** Task-prompt quality, with a harness constraint that is only reported after submission
-
-**Evidence**
-- `0497d55c` L5 to L6, 00:42:19: `/goal` command output "Goal condition is limited to 4000 characters (got 5766)".
-- `757704f4` L5 to L6, 00:43:17: same message, "got 4031".
-- `336fd332` L7 to L9, 00:44:16: accepted at 3886 characters.
-- Each failed session had `/clear` followed by `/goal` and no model activity.
-- The same standing preamble appears in all four goal texts (goal lengths: `3fecb2c4` 3874, `0497d55c` 5766, `757704f4` 4031, `336fd332` 3886 characters): "Read CLAUDE.md…", "inspect git status/diff", "preserve … unrelated untracked files", "Do not commit". `f14a6e61` L18 lists `core-invariants.md` and `CLAUDE.md` among the automatically loaded instruction files, so these lines duplicate always-loaded instructions.
-
-**Recurrence**
-- Episodes: 1 (two consecutive failed invocations of one attempt). Failed invocations: 2. Affected sessions: 2/6.
-- The two sessions are consecutive retries, so this is the weakest form of recurrence in the report.
-
-**Measurable cost:** 2 failed `/goal` invocations, 2 abandoned sessions, and 1m57s from the first failure to the accepted goal (00:42:19 to 00:44:16, both timestamped). The failure blocked all work in each session.
-
-**Root-cause hypothesis**
-- Hypothesis: the limit is only surfaced after submission; there is no local length check. Whether goal text is re-injected in full is visible in `336fd332` L1286 ("Stop hook feedback" quotes the goal), so long goals also cost context on every stop check. Not measured here.
-
-**Recommended intervention:** a task-prompt template that drops the duplicated preamble, plus a pre-submit length check (`wc -m`).
-**Traceability:** ranked backlog item 4.
-**Confidence:** Medium.
-
-### Categories with no supported recurring finding
-
-- **Category 2, repository discovery and lost-context recovery.** Both goal sessions began with `PROGRESS.md` and `docs/plans/P6.md`, and `f14a6e61` answered a four-phase question from `PROGRESS.md` in 17s. There were 0 exactly duplicated Bash commands (42 of 42 distinct in `3fecb2c4`, 110 of 110 in `336fd332`) and 0 duplicated `Read` ranges. Re-reads of `store/write.py`, `tasks.py` and `market_data.py` (3 to 4 each) followed edits to those files. No repeated-investigation friction was found.
-- **Category 6, agent execution quality (other than F1 and F3).** No premature edits, scope drift or missed validation appeared. Both goals said "do not start P6.3" or "P6.4+", and both final reports stayed within scope. Both sessions updated `docs/PROGRESS.md` as CLAUDE.md requires.
+No additional cross-session premature-edit, scope-drift, missed-validation, or weak-handoff pattern met the recurrence threshold beyond F1–F4.
 
 ## Isolated but potentially high-impact findings
 
-These are single-session, non-recurring, and are not systemic.
+### I1 — Resource pressure interrupted two heavy validations in one session
 
-### I1 (non-recurring, `336fd332`): Background verification runs killed by memory pressure
+- **Finding:** **Non-recurring.**
+- **Category:** Dependency/environment and validation workflow.
+- **Responsibility class:** Environment/resource constraint; exact source of the memory limit is unknown.
+- **Evidence:** `336fd332-be0c-4219-a966-db1e39a43513.jsonl @ events 1285–1303`: two background validations were stopped with a “system is running low on memory” notice. The assistant reported their results as unknown, did not claim a pass, then ran the suite and simulation sequentially; those later commands completed successfully.
+- **Recurrence:** **1 occurrence**; **1 affected session; 1/6 sessions**.
+- **Measurable cost:** Two heavy validation attempts were terminated and rerun sequentially. The recovered sequential validations passed; the interrupted attempts supplied no result.
+- **Root-cause hypothesis:** Hypothesis: running multiple memory-heavy validations concurrently exceeded the session’s available memory.
+- **Recommended intervention:** When local memory is constrained, run the full suite and simulation serially or verify available resources before starting concurrent jobs. **Layer:** human validation workflow.
+- **Traceability:** This isolated item is not in the ranked recurring backlog.
+- **Confidence:** High for the interruption and recovery; medium for the precise resource cause.
 
-- **Category / responsibility:** 5 / permissions or external (host condition; cause unknown)
-- **Evidence:**
-  - L1239 to L1240, 01:59:35: the full `REQUIRE_SERVICES=1 REQUIRE_TIMESCALE=1` suite was started in the background. L1267 to L1268, 02:00:18: the sims were started the same way.
-  - L1283 to L1284, 02:00:24: both were `killed` ("stopped because the system is running low on memory"). The harness note says this "says nothing about the command."
-  - L1285: the agent reported that results were unknown and did not restart.
-  - L1286, 02:00:36: the goal's Stop hook fed back the full verification requirement.
-  - L1256 and L1264: two failed tool calls while waiting (`sleep 240 … tail` blocked by the harness; `Monitor` called without its schema).
-  - Reruns run sequentially: full suite L1297 to L1298, 02:00:41 to 02:03:38 (2m57s); sims L1301 to L1302, 02:03:41 to 02:08:24 (4m43s).
-- **Consequence:** the sequential reruns took 7m40s of measured run time (2m57s + 4m43s) after the kill; the killed runs' own duration is not recorded.
-- **Root cause:** unknown. Hypothesis only: two Docker containers plus two parallel test processes exceeded host memory. Not established by the corpus.
-- **Confidence:** Low. Not corroborated, so no ranked item depends on it.
+### I2 — A TimescaleDB-specific check was skipped on plain Postgres
+
+- **Finding:** **Non-recurring.**
+- **Category:** Dependency/environment and validation workflow.
+- **Responsibility class:** Test environment.
+- **Evidence:** `3fecb2c4-e15a-4940-85b3-00f01636b725.jsonl @ events 295, 299, 313`: the broader P6.2 suite passed on plain PostgreSQL 16, while `tests/store/test_schema.py` reported that TimescaleDB was not installed and skipped its Timescale-specific check. The final response called out that limitation.
+- **Recurrence:** **1 occurrence**; **1 affected session; 1/6 sessions**.
+- **Measurable cost:** One schema test was skipped; the transcript does not show a retry against TimescaleDB in that session.
+- **Root-cause hypothesis:** Hypothesis: the local database service did not match the TimescaleDB environment required by that test. The transcript establishes the skip, not why that environment was selected.
+- **Recommended intervention:** Require the Timescale service for any gate that claims Timescale schema coverage; keep plain-Postgres results labeled partial. **Layer:** environment/bootstrap and validation workflow.
+- **Traceability:** This isolated item is not in the ranked recurring backlog.
+- **Confidence:** High for the skip; medium for the environment cause.
+
+The PDF-reading path in the P6.3 transcript also lacked installed PDF utilities and required a custom extraction attempt. The transcript shows that extraction later succeeded, so no continuing high-impact consequence is established and it is not elevated to a separate finding.
 
 ## Ranked friction backlog
 
-Ranking basis: expected impact × recurrence × confidence, qualitatively; the evidence does not support a numeric score. Every item traces to a reported finding.
+Ranking considers observed consequence, recurrence across independent files, and confidence. Items 1 and 3 are distinct controls for the same planning finding: one improves the first submission; the other prevents contradictions from surviving later revisions.
 
-| Rank | Finding(s) | Proposed intervention | Layer | Affected sessions | Observed cost targeted | Confidence |
-|---|---|---|---|---|---|---|
-| 1 | F1 | Plan template in `docs/plans/README.md` with a mandatory "Boundary check" and "Owner decisions" section; CLAUDE.md plan-revision rule (A2); approval-wording convention | Repository documentation + CLAUDE.md + human workflow | 2/6 | 7 rejected plan submissions and corrective turns; 33m24s and 4m04s from first submission to approval or implementation start | Medium |
-| 2 | F2 | Install `make` or add `scripts/verify_local` (services, checks, tests, gate); optional Makefile `test-services` target | Deterministic tooling / bootstrap | 2/6 | 7 bring-up calls across two sessions; 56% of pytest commands re-type connection vars; gate not runnable in 2/2 final reports | Medium |
-| 3 | F3 | CLAUDE.md file-editing rule (A1) | CLAUDE.md | 2/6 | 4 episodes, 17 tool calls, about 77s | High |
-| 4 | F4 | Goal template without duplicated preamble and a `wc -m` pre-check | Task-prompt template | 2/6 (1 episode) | 2 failed `/goal` invocations, 2 abandoned sessions, 1m57s | Medium |
-| 5 | F5 | PostToolUse hook running `ruff check` on the touched file | Deterministic tooling | 2/6 | 28 failing static-check results | Low |
+1. **Add a pre-approval requirement-to-design-to-test traceability table.**
+   - **Underlying finding:** F1.
+   - **Intervention:** Plan template / human workflow.
+   - **Affected sessions:** 2/6.
+   - **Observed cost targeted:** Seven owner correction/revision turns across two plan approvals.
+   - **Confidence:** Medium.
+   - **Why it outranks item 2:** It targets the highest-count corrective work, and the corrections concerned durable data identity, run-scoped evidence, and halt safety; item 2 is more mechanically preventable but had lower consequence.
 
-**Why each outranks the next**
-- **1 over 2.** Item 1 targets 7 corrective user turns and the longest measured delay (33m24s). Item 2 has real but smaller measured cost (about 7 tool calls), and its fix depends on whether `make` can be installed.
-- **2 over 3.** Item 2 affects every gate-dependent session and blocks the CLAUDE.md completion criterion outright. Item 3 wastes about 77s in four episodes even though its confidence is higher.
-- **3 over 4.** Item 3 recurred as 4 independent episodes. Item 4 is a single episode split across two stub sessions.
-- **4 over 5.** Item 4 has a clear mechanical cause and a near-free fix. Item 5 merges heterogeneous rule types and its intervention is unproven.
+2. **Preflight `/goal` length before submission.**
+   - **Underlying finding:** F4.
+   - **Intervention:** Task-prompt template or deterministic command wrapper.
+   - **Affected sessions:** 3/6.
+   - **Observed cost targeted:** Two rejected calls and two session starts that stopped before repository work, followed by one accepted retry.
+   - **Confidence:** High.
+   - **Why it outranks item 3:** The failure was deterministic and repeated across three files in one task chain; a character counter can prevent it without interpreting requirements.
+
+3. **Use a revision-delta and consistency pass before resubmitting a plan.**
+   - **Underlying finding:** F1.
+   - **Intervention:** Plan review checklist / human workflow.
+   - **Affected sessions:** 2/6.
+   - **Observed cost targeted:** In P6.3, four additional correction rounds followed the initial plan correction; stale design details were still called out in later reviews.
+   - **Confidence:** Medium.
+   - **Why it outranks item 4:** The reviewed contradictions had higher consequence than the test-inventory failures, though a checklist cannot guarantee owner decisions are predictable.
+
+4. **Update inventory-bearing test fixtures with module and task registrations.**
+   - **Underlying finding:** F3.
+   - **Intervention:** Repository test helpers / phase workflow.
+   - **Affected sessions:** 2/6.
+   - **Observed cost targeted:** Two failed test invocations, one in each implementation session.
+   - **Confidence:** Medium.
+   - **Why it outranks item 5:** Both failures came from directly observable duplicated test inventories and are preventable within the affected change slice.
+
+5. **Avoid nested shell heredocs for multiline source edits.**
+   - **Underlying finding:** F2.
+   - **Intervention:** Harness tool-use pattern / human workflow.
+   - **Affected sessions:** 2/6.
+   - **Observed cost targeted:** Two failed Bash tool calls from unmatched quotes.
+   - **Confidence:** Medium.
+   - **Why it ranks fifth:** The failure mechanism is clear, but only two isolated command failures were observed and both were recovered.
 
 ## Proposed CLAUDE.md amendments
 
-### A1. File-editing rule (addresses F3)
-
-```
-## Editing files
-- Change source with the Edit/Write tools. Do not patch files with `python - <<EOF` or `sed` when the payload contains backslash escapes (`\n`, `\"`) or nested quotes: under Git Bash on this host they are rewritten and the file ends up with broken string literals.
-- If a scripted patch is unavoidable, Write the script to the scratchpad and run it, then run `ruff format` and `ruff check` on the touched files before the next step.
-```
-
-Why CLAUDE.md: the failure is a tool-choice decision taken at write time, which no script or CI check can prevent, and the default tool guidance did not stop it in either session. A hook that pattern-matches heredoc payloads would cost more than the observed 77s.
-
-### A2. Plan-revision rules (addresses F1)
-
-```
-## Plans
-- Revise a plan in place: rewrite the affected sections. Never append a "REVISIONS" block that leaves superseded text above it.
-- Before every ExitPlanMode call, including resubmissions, grep the plan for each term, table, column or file that the feedback removed or renamed, and reconcile every hit.
-- Include a "Boundary check": for each new module, import, write path or identifier, name the CLAUDE.md invariant, import-linter contract or blueprint section it touches. A choice that would change an existing safety-path order (halt/cancel/flatten), the read/write boundary (`store.as_of` vs `store.write`), identifier truthfulness (for example a placeholder CIK) or a blueprint key goes under "Owner decisions" with options; it is not built into the design as a default.
-```
-
-Why CLAUDE.md: these are execution-time behaviours the agent must know while drafting. They depend on judgement (what touches a boundary) that a script cannot decide. The stale-term grep could be scripted, but the plan lives in the agent's context and the check must run before submission. The examples come from the observed rejections.
-
-### A3. Verification pointer (addresses F2; apply only after `scripts/verify_local` exists)
-
-```
-- `make` is not installed on the Windows dev host. Run `scripts/verify_local` (services, check, test, gate <Pn>). A final report must state whether the phase gate ran via `make`, via `verify_local`, or not at all.
-```
-
-Why CLAUDE.md: a pointer to the deterministic tool is durable, repository-specific guidance. The tool itself is the intervention. Do not add this line before the script exists.
-
-No CLAUDE.md change is justified for F4 (a task-prompt template concern) or F5 (weak evidence and a better hook).
+No new CLAUDE.md text is justified by this corpus. The current file already says to keep goal text at or below 3,500 characters, prefer `Edit`/`Write`, and use a scratch script for complex transformations. The `/goal` command rejects oversize text before those repository instructions are necessarily loaded; repeating the same guidance in CLAUDE.md is unlikely to prevent that failure. The observed shell failures also support enforcing or operationalizing the existing guidance rather than duplicating it.
 
 ## Proposed non-CLAUDE.md harness changes
 
 ### Deterministic controls
 
-1. **Verification stack (F2).**
-   - Smallest step: install GNU `make` on the host so the existing `gate-P<n>` targets run as CLAUDE.md states.
-   - Add a Makefile `test-services` target, or a script, that idempotently starts `timescale/timescaledb:latest-pg16` (with `--platform linux/amd64` as used in `336fd332` L376) and `redis:7-alpine` on fixed ports and prints `TEST_DATABASE_URL`, `TEST_REDIS_URL`, `REQUIRE_SERVICES=1`, `REQUIRE_TIMESCALE=1`.
-   - If `make` cannot be installed: `scripts/verify_local` with `services`, `check` (ruff check, ruff format --check, mypy, lint-imports, `schema_export --check`), `test`, `gate <Pn>`. The check set is the one both substantive sessions assembled by hand.
-   - Implement `gate-P6` so it does not exit 1 as a stub before P6 closes.
-2. **Post-write static check (F5).** A PostToolUse hook that runs `ruff check` (including `E501`) on the file just written and returns the output. It moves feedback from a batch to the write. It is unproven and does not remove the loop, only shortens it.
+- Add a goal-entry preflight that counts the final text before submission, warns above 3,500 characters, and blocks above the 4,000-character command limit. Store only the count and result, not prompt contents.
+- Keep structural test fixtures close to the registries they model. For synthetic import-linter trees, provide a helper that creates all configured root packages and required modules. For scheduled tasks, make test updates part of task registration changes and retain an explicit assertion for required task names.
+- For complex scripted Python edits, offer a scratch-script workflow that can run `py_compile` and the configured linter against listed target files immediately after transformation, before a broad test run.
 
-### Advisory guidance
+### Advisory guidance and human workflow
 
-3. **Plan template (F1).** Add "Boundary check", "Owner decisions" and "Supersession rule" sections to `docs/plans/README.md`. The evidence is the three boundary conflicts and two stale-text rounds above.
-4. **Approval wording (F1, human workflow).** Rejection feedback should begin with either "APPROVED, apply these edits and proceed" or "NOT APPROVED, resubmit". Consolidate feedback into one round where possible. `3fecb2c4` and `336fd332` handled "approved with corrections" differently, and the corpus cannot say which was wanted.
-5. **Goal template (F4, task-prompt template).** Goal text contains only the objective, the scope fence ("do not start P6.4+") and acceptance checks. Drop instructions already loaded automatically (read CLAUDE.md, preserve unrelated changes, do not commit). Run `wc -m` before submitting.
-6. **CI as fallback (F2, weak evidence).** Both final reports note that CI has not run on the branch. Running the gate in CI on the work-in-progress branch would supply a gate result when `make` is unavailable locally. Pushing needs the owner's decision, so this is advisory only.
+- Before plan approval, make a short requirement/source → design → failure behavior → verification table, and distinguish unresolved owner decisions from settled choices.
+- After owner feedback, record each correction with the plan sections it changes and concepts it supersedes; reread the complete revised plan before resubmission. The existing plan document already calls for in-place reconciliation; the transcripts suggest the review workflow should make that check explicit.
+- On memory-constrained machines, run heavy full-suite and simulation validations serially. Report interrupted attempts as unknown until a complete rerun exists.
+- When local verification claims TimescaleDB coverage, use the Timescale service rather than silently accepting a plain-Postgres skip.
 
 ## New-session preflight checklist
 
-Each line traces to an observed event.
-
-- [ ] Goal text is 4000 characters or fewer (`wc -m`) and omits rules already loaded automatically. (F4)
-- [ ] `make --version` works. If it does not, use the verification script instead of hand-assembling commands. (F2)
-- [ ] The Postgres test service is TimescaleDB, not plain Postgres, when the change touches schema or migrations, and Redis is up. Otherwise a Timescale test skips. (F2)
-- [ ] Connection variables are exported once, not re-typed per command. (F2)
-- [ ] The plan has a "Boundary check" and an "Owner decisions" list, and revisions are made in place with the removed terms grepped. (F1)
-- [ ] Plan feedback starts with "APPROVED" or "NOT APPROVED". (F1)
-- [ ] File patches use Edit/Write; no backslash escapes or nested quotes in `python - <<` payloads. (F3)
-- [ ] Lines stay at or under 100 columns, including comments, docstrings and strings. (F5)
-- [ ] Heavy verification runs are executed one at a time, not as parallel background jobs. (isolated, I1)
+- [ ] Before `/goal`, remove standing repository instructions already available in the harness and count the final goal text; keep it under 3,500 characters.
+- [ ] Read current progress/spec/plan, then map each explicit requirement to a plan choice, failure behavior, and verification.
+- [ ] List unresolved owner decisions separately; do not choose a durable architecture or data-source rule silently.
+- [ ] After each correction, remove superseded terms throughout the full plan and reread it before requesting approval again.
+- [ ] Use `Edit`/`Write` for ordinary edits. Put complex transformations in a scratch script instead of a nested shell heredoc.
+- [ ] Immediately parse/lint touched Python files after a scripted transformation; update module/task inventory tests alongside registrations.
+- [ ] Check the intended database service before claiming schema coverage, and serialize memory-heavy validations when resources are constrained.
+- [ ] Do not report interrupted or skipped checks as passing evidence.
 
 ## Measurement plan for the next six sessions
 
-**Cohort rules.** Count the same events with the same definitions used here. Include stub sessions, but report every metric both per all sessions and per substantive implementation session (a session with at least one Write or Edit to repository code). The baseline has only two substantive sessions, so values are directional. Aim for at least four substantive sessions in the next cohort.
+Use the next six consecutive Claude Code session transcripts for repository work, including short or empty sessions in the six-session denominator. Review each file independently first. For each metric, record JSONL event numbers, count one underlying cause/recovery loop once across session files, and separately record affected sessions. Apply the same thresholds below; do not recategorize ordinary test failures as harness friction without evidence.
 
-**Comparison procedure**
-1. Copy the six transcripts read-only to a review folder.
-2. Parse each JSONL independently. Record for each `tool_use` its name, input, timestamp and paired `tool_result`, including `is_error`.
-3. Apply the definitions below with the same regexes, then apply the unit-of-analysis rule and manual clustering of contiguous fix loops.
-4. Compute each metric per session, then the median and range per cohort.
-5. Compare against the baseline column. A metric moves only if the direction holds in at least 2 of the substantive sessions.
-6. Do not compare elapsed times unless both endpoints are timestamped.
+| Metric | Exact definition and counting unit | Baseline from this corpus | Desired direction | Interpretation caveat |
+|---|---|---|---|---|
+| Goal-limit failure episodes | Distinct task goal-compression chains with a rejected `/goal`; count episodes, plus failed calls and affected transcript files separately | 1 episode; 2 rejected calls; 3/6 files touched by the chain | Fewer episodes and zero rejected calls | A single chain can span several transcripts; do not count each retry as an episode |
+| Plan correction turns | Owner correction/revision turns between first plan submission and approval; count turns and plan episodes separately | 7 turns across 2 plan episodes and 2/6 sessions | Fewer avoidable turns without suppressing necessary decisions | A correction can improve safety and should not be treated as waste solely because it occurred |
+| Scripted-edit failures | Distinct source-edit episodes blocked by shell parsing or leaving a target syntactically invalid; count episodes and failed tool calls separately | 2 independent shell parse failures in 2/6 sessions; a related malformed-fixture repair loop is recorded under test inventory | Fewer episodes and fewer repair calls | Shell pipelines can mask exit status; inspect tool output, not only process code |
+| Structural test-inventory failures | Failed tests directly caused by stale synthetic module trees or task-registration expectations; count failed test episodes | 2 episodes in 2/6 sessions | Fewer failures | Do not include legitimate product-behavior failures |
+| Resource-interrupted validations | Heavy validation attempts explicitly terminated for resource pressure; count interrupted attempts and episodes | 1 episode; 2 terminated attempts in 1/6 sessions | Zero interrupted attempts | Resource cause is only known when the transcript says so |
+| Task-bearing sessions ending blocked | Sessions with an explicit task that end before task execution or with required validation unresolved; count sessions, not retries | 2/5 explicit-task sessions ended at the rejected goal stage; the sixth file had no task | Fewer blocked sessions | Also report the six-file ratio; a task may span multiple sessions |
 
-| Metric | Exact definition | Unit | Collection method | Baseline from these six sessions | Desired direction | Interpretation caveat |
-|---|---|---|---|---|---|---|
-| Corrective user turns | Rejected `ExitPlanMode` results carrying feedback, plus user messages that redirect work; excludes `/clear`, `/goal` and Stop-hook feedback | per session | `tool_result` with `is_error` on `ExitPlanMode`; manual read of user messages | 7 in total (`3fecb2c4` 2, `336fd332` 5, others 0); 3.5 per substantive session | Down | Some rounds add legitimate new requirements, so zero is not the target |
-| Plan submissions per approved plan | `ExitPlanMode` calls until approval or implementation start | per plan | count `tool_use` | 2 (`3fecb2c4`, approval implicit at L87), 6 (`336fd332`) | Down | Approval semantics differ between the two baselines |
-| Plan-time boundary conflicts | Rejection items citing a spec, invariant or architecture boundary violation | per plan | manual read of rejection text | 3 (L68 item 2, L87 items 1 to 2, L231 item 2) | Down | Manual classification |
-| Scripted-patch corruption episodes | Episodes where a heredoc/`sed` patch produced a shell error or invalid syntax, then a repair | per session | `unexpected EOF`, `invalid-syntax` results tied to a preceding heredoc | 2 and 2 | Down to 0 | Low per-episode cost |
-| Failing static-check results | Tool results from `ruff`, `mypy` or `lint-imports` containing an error summary | per session | regex `Found \d+ errors?`, `: error:`, `E501`, `Broken contracts` | 9 (`3fecb2c4`, 4 F3-induced) and 19 (`336fd332`, 1 F3-induced) | Down | Volume follows amount of code written |
-| Service bring-up calls before first passing services-backed test | Bash calls that start or inspect containers or read `tests/services.py`, counted from session start to the first passing run | per session | manual, keyed on `docker` and `services.py` | 3 and 4 (baseline counts calls, not time) | Down | Baseline sessions started with services in different states |
-| Inline env-var rate | pytest Bash commands containing `TEST_DATABASE_URL` divided by all pytest commands | ratio | regex on commands | 5/11 and 13/21 (56% pooled) | Down toward 0 | Falls only if the environment persists between calls |
-| Gate runnable | Final report states the CLAUDE.md gate command ran | yes/no per session | read final message | 0 of 2 substantive sessions | Up | Depends on gate existing (`gate-P6` is a stub) |
-| Failed `/goal` invocations | `/goal` outputs containing "limited to 4000 characters" | count | grep | 2 (1 episode) | 0 | Very small baseline |
-| Sessions ending with unresolved work | Session where the goal was not started, or a final report lists a blocker or skipped required check | sessions per cohort | manual | 4 of 6 (2 stubs never started; `3fecb2c4` skipped test and gate; `336fd332` owner blocker and gate) | Down | Not all blockers are harness friction (for example the owner's Alpaca mapping validation) |
-| Repeated identical commands | Exact-duplicate Bash command strings | rate per session | string compare | 0 in both substantive sessions | Stay at 0 | Guard metric; near-duplicates after edits are expected |
-| Friction events attributable to missing repository guidance | Episodes classified "repository documentation" or "repository structure" under this report's labels | per session | apply the same responsibility labels | 1 (F2) per substantive session | Down | Classification is judgemental; label before looking at metric values |
-
-Elapsed-time baselines (plan-approval loops of 4m04s and 33m24s) may be reused only where both endpoints are timestamped.
+For comparison, publish the next cohort’s raw numerator and denominator for every metric, then compare with these baselines using the same episode-deduplication rule. Keep task-bearing-session rates separate from all-transcript rates. Do not infer time savings; record elapsed time only when both timestamps for the same episode are explicit and comparable.
 
 ## Executive summary
 
-Across six transcripts, only two contain implementation work, and the most costly recurring friction in both is the plan-approval loop: 7 rejected `ExitPlanMode` submissions (2 in P6.2, 5 in P6.3), with 33m24s from first submission to approval in P6.3, driven by draft designs that crossed existing architecture boundaries and by revisions that left stale text behind. The strongest evidence-backed interventions are a plan template with a boundary check and owner-decision list (plus an in-place revision rule) and a scripted local verification path, because `make` is absent on the host and both final reports say the CLAUDE.md gate could not be run; a file-patching rule in CLAUDE.md addresses four shell-heredoc corruption episodes with a high-confidence cause. The main uncertainty is generalisability: both substantive sessions are consecutive work by one user on adjacent sub-phases, so no finding is seen in more than 2 of 6 sessions, the goal-length episode is a single episode split across two stub sessions, and approval wording is ambiguous between the two plan loops. The next six sessions should test the interventions by comparing corrective turns, plan submissions per approved plan, plan-time boundary conflicts, scripted-patch corruption episodes, service bring-up calls and gate-runnable status against the baselines here, using the same counting rules and per-substantive-session reporting.
+Across six transcripts, the strongest repeated friction was plan approval churn: two implementation sessions accumulated seven corrective plan turns over architectural boundaries that should be mapped to requirements and verification before review. The most enforceable quick win is a `/goal` length preflight; two calls failed the hard 4,000-character cap in one P6.3 retry chain spanning three session files. A requirement-to-design-to-test plan table, a safe scratch-edit path, and synchronized test inventories target the other directly observed loops. The main uncertainty is whether owner plan corrections were avoidable or were the intended safety review. Apply the same ledgers and episode-counting rules to the next six transcripts to test whether rejected goals, corrective plan turns, edit failures, and stale-inventory test failures decline without reducing decision quality.
