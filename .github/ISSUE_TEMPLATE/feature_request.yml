@@ -1,0 +1,89 @@
+name: Feature Request
+description: Suggest a new feature or an improvement to existing behavior.
+title: "[Feature]: "
+labels: ["enhancement", "triage"]
+projects: []
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. Focus on the problem you are trying to solve —
+        not just the solution. This helps maintainers evaluate the idea on its merits.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: What limitation, friction, or missing capability are you running into?
+      placeholder: I'm always frustrated when...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: Describe what you want to happen. Sketches, pseudo-code, or examples help.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Other workarounds, existing tools, or approaches you have tried or rejected.
+
+  - type: dropdown
+    id: type
+    attributes:
+      label: Request Type
+      options:
+        - New feature
+        - Enhancement to existing feature
+        - Performance improvement
+        - Developer experience / tooling
+        - Documentation
+        - Other
+      default: 0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Estimated Scope
+      description: Your best guess at the size of the change.
+      options:
+        - Small — isolated tweak
+        - Medium — touches one area
+        - Large — cross-cutting change
+        - Not sure
+      default: 3
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: audience
+    attributes:
+      label: Who Benefits
+      options:
+        - label: This would benefit most users of the project.
+          required: false
+        - label: This is specific to my use case or environment.
+          required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Links, benchmarks, prior art, or anything else that supports the request.
+      placeholder: Optional
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-Submission Checks
+      options:
+        - label: I searched existing issues and discussions and found no duplicate request.
+          required: true

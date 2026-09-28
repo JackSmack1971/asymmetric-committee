@@ -1,0 +1,7 @@
+interface:
+  display_name: "Asymmetric Point-in-Time Store"
+  short_description: "Preserve as-of correctness and isolate persistence behind store APIs"
+  default_prompt: "Use $asymmetric-point-in-time-store for this persistence or historical-data change."
+
+policy:
+  allow_implicit_invocation: true
